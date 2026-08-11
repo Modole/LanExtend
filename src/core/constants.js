@@ -1,0 +1,37 @@
+'use strict';
+
+const PROTOCOL_VERSION = 1;
+const DISCOVERY_PORT = 47_771;
+const SIGNAL_PORT = 47_772;
+const MAX_SIGNAL_BYTES = 256 * 1024;
+const MAX_BEACON_BYTES = 4 * 1024;
+
+const DEFAULTS = Object.freeze({
+  schemaVersion: 1,
+  host: {
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    bitrateMbps: 8,
+    hiDPI: false,
+    autoReconnect: true,
+    lastDeviceId: null,
+    lastSourceId: null
+  },
+  receiver: {
+    id: null,
+    name: null,
+    port: SIGNAL_PORT,
+    autoFullscreen: true
+  },
+  rememberedDevices: []
+});
+
+module.exports = {
+  DEFAULTS,
+  DISCOVERY_PORT,
+  MAX_BEACON_BYTES,
+  MAX_SIGNAL_BYTES,
+  PROTOCOL_VERSION,
+  SIGNAL_PORT
+};

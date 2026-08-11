@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; worker-src 'none'"
+    >
+    <title>LanExtend</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body class="is-booting">
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <div id="boot-screen" class="boot-screen" aria-live="polite">
+      <img src="../../assets/lanextend-mark.svg" alt="" width="54" height="54">
+      <div>
+        <strong>LanExtend</strong>
+        <span>正在启动局域网显示服务…</span>
+      </div>
+    </div>
+
+    <div id="app" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="../../assets/lanextend-mark.svg" alt="" width="38" height="38">
+          <div class="brand-copy">
+            <strong>LanExtend</strong>
+            <span id="app-version">局域网扩展屏</span>
+          </div>
+        </div>
+
+        <div id="role-badge" class="role-badge">
+          <span class="role-dot" aria-hidden="true"></span>
+          <span id="role-label">正在识别角色</span>
+        </div>
+
+        <nav id="host-nav" class="side-nav role-only host-only" aria-label="主端导航">
+          <button class="nav-item is-active" type="button" data-scroll-to="host-overview">
+            <span class="nav-icon icon-grid" aria-hidden="true"></span>
+            扩展工作台
+          </button>
+          <button class="nav-item" type="button" data-scroll-to="device-panel">
+            <span class="nav-icon icon-screen" aria-hidden="true"></span>
+            接收设备
+            <span id="device-count" class="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-scroll-to="host-settings">
+            <span class="nav-icon icon-sliders" aria-hidden="true"></span>
+            画面设置
+          </button>
+        </nav>
+
+        <nav id="receiver-nav" class="side-nav role-only receiver-only" aria-label="子端导航">
+          <button class="nav-item is-active" type="button" data-scroll-to="receiver-overview">
+            <span class="nav-icon icon-screen" aria-hidden="true"></span>
+            接收画面
+          </button>
+          <button class="nav-item" type="button" data-scroll-to="receiver-settings">
+            <span class="nav-icon icon-sliders" aria-hidden="true"></span>
+            子端设置
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="privacy-note">
+          <span class="lock-mark" aria-hidden="true"></span>
+          <div>
+            <strong>仅在局域网传输</strong>
+            <span>无云端 · 无账号 · 端到端直连</span>
+          </div>
+        </div>
+        <div class="sidebar-status">
+          <span id="sidebar-status-dot" class="status-light"></span>
+          <div>
+            <span id="sidebar-status-title">服务准备中</span>
+            <small id="sidebar-status-detail">请稍候</small>
+          </div>
+        </div>
+      </aside>
+
+      <main id="main-content" class="main-content">
+        <header class="topbar">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">MACOS · 主端</p>
+            <h1 id="page-title">扩展工作台</h1>
+          </div>
+          <div class="topbar-actions">
+            <span id="protocol-chip" class="soft-chip">协议 v1</span>
+            <button id="refresh-devices" class="icon-button role-only host-only" type="button" title="刷新设备列表" aria-label="刷新设备列表">
+              <span class="refresh-glyph" aria-hidden="true"></span>
+            </button>
+            <button id="receiver-fullscreen-top" class="button button-quiet role-only receiver-only" type="button">
+              全屏播放
+            </button>
+          </div>
+        </header>
+
+        <section id="host-root" class="role-panel host-only" hidden>
+          <div id="permission-banner" class="notice notice-warning" hidden>
+            <span class="notice-symbol">!</span>
+            <div>
+              <strong>需要屏幕录制权限</strong>
+              <p>macOS 需要授权 LanExtend 捕获扩展屏。授权后请重新启动应用。</p>
+            </div>
+            <button id="open-screen-permission" class="button button-small button-secondary" type="button">打开系统设置</button>
+          </div>
+
+          <section id="host-overview" class="hero-card">
+            <div class="hero-copy">
+              <span class="section-kicker">无线扩展显示器</span>
+              <h2 id="host-hero-title">把一台 Windows 设备变成 Mac 扩展屏</h2>
+              <p id="host-hero-description">选择同一局域网内的子端，LanExtend 会创建独立虚拟显示器并以低延迟画面传输。</p>
+              <div id="connection-steps" class="connection-steps" aria-label="连接进度">
+                <span class="step is-current" data-step="device"><i>1</i>选择设备</span>
+                <span class="step" data-step="display"><i>2</i>准备显示器</span>
+                <span class="step" data-step="stream"><i>3</i>建立画面</span>
+              </div>
+            </div>
+            <div class="hero-visual" aria-hidden="true">
+              <div class="laptop-shape">
+                <div class="laptop-screen">
+                  <div class="mock-window mock-one"></div>
+                  <div class="mock-window mock-two"></div>
+                </div>
+                <div class="laptop-base"></div>
+              </div>
+              <div id="signal-beam" class="signal-beam"><i></i><i></i><i></i></div>
+              <div class="receiver-shape"><span>Windows</span></div>
+            </div>
+          </section>
+
+          <div id="host-stats" class="stats-strip" hidden>
+            <div><span>状态</span><strong id="stat-connection">未连接</strong></div>
+            <div><span>画面</span><strong id="stat-resolution">—</strong></div>
+            <div><span>帧率</span><strong id="stat-fps">—</strong></div>
+            <div><span>实时码率</span><strong id="stat-bitrate">—</strong></div>
+            <div><span>往返延迟</span><strong id="stat-latency">—</strong></div>
+            <div class="stats-device"><span>接收设备</span><strong id="stat-device">—</strong></div>
+          </div>
+
+          <div class="workspace-grid">
+            <section id="device-panel" class="panel device-panel">
+              <div class="panel-header">
+                <div>
+                  <span class="section-kicker">第一步</span>
+                  <h2>选择接收设备</h2>
+                </div>
+                <span id="scan-state" class="scan-state"><i></i>正在发现</span>
+              </div>
+              <div id="device-list" class="device-list" aria-live="polite"></div>
+              <div id="device-empty" class="empty-state" hidden>
+                <div class="empty-radar" aria-hidden="true"><i></i></div>
+                <strong>还没有发现子端</strong>
+                <p>请在 Windows 设备上打开 LanExtend，或手动输入它的局域网地址。</p>
+              </div>
+              <button id="open-manual-device" class="button button-secondary button-wide" type="button">
+                <span class="plus-glyph" aria-hidden="true">+</span> 手动添加 IP 地址
+              </button>
+            </section>
+
+            <section id="host-settings" class="panel settings-panel">
+              <div class="panel-header">
+                <div>
+                  <span class="section-kicker">第二步</span>
+                  <h2>配置扩展画面</h2>
+                </div>
+                <span id="virtual-badge" class="capability-badge">虚拟显示</span>
+              </div>
+
+              <fieldset id="capture-mode" class="segmented-field">
+                <legend>显示来源</legend>
+                <div class="segmented-control">
+                  <label>
+                    <input type="radio" name="captureMode" value="virtual" checked>
+                    <span>创建扩展屏<small>推荐</small></span>
+                  </label>
+                  <label>
+                    <input type="radio" name="captureMode" value="existing">
+                    <span>已有显示器</span>
+                  </label>
+                </div>
+              </fieldset>
+
+              <div id="source-picker-row" class="field-group source-picker-row" hidden>
+                <label for="capture-source">捕获显示器</label>
+                <div class="input-with-button">
+                  <select id="capture-source">
+                    <option value="">正在读取显示器…</option>
+                  </select>
+                  <button id="refresh-sources" class="icon-button" type="button" title="刷新显示器" aria-label="刷新显示器">
+                    <span class="refresh-glyph" aria-hidden="true"></span>
+                  </button>
+                </div>
+                <p id="source-help" class="field-help">当虚拟显示不可用时，可将已有显示器画面发送到子端。</p>
+              </div>
+
+              <div class="settings-grid">
+                <div class="field-group field-span-two">
+                  <label for="resolution-preset">分辨率</label>
+                  <select id="resolution-preset">
+                    <option value="1920x1080">1920 × 1080 · Full HD</option>
+                    <option value="2560x1440">2560 × 1440 · 2K</option>
+                    <option value="3008x1692">3008 × 1692 · Retina</option>
+                    <option value="3840x2160">3840 × 2160 · 4K</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div id="custom-resolution" class="custom-resolution field-span-two" hidden>
+                  <div class="field-group">
+                    <label for="display-width">宽度</label>
+                    <input id="display-width" type="number" min="800" max="7680" step="2" inputmode="numeric">
+                  </div>
+                  <span>×</span>
+                  <div class="field-group">
+                    <label for="display-height">高度</label>
+                    <input id="display-height" type="number" min="600" max="4320" step="2" inputmode="numeric">
+                  </div>
+                </div>
+                <div class="field-group">
+                  <label for="display-fps">刷新率</label>
+                  <select id="display-fps">
+                    <option value="30">30 FPS</option>
+                    <option value="60">60 FPS</option>
+                    <option value="24">24 FPS</option>
+                    <option value="15">15 FPS</option>
+                  </select>
+                </div>
+                <div class="field-group bitrate-field">
+                  <div class="label-line">
+                    <label for="display-bitrate">画面码率</label>
+                    <output id="bitrate-output" for="display-bitrate">8 Mbps</output>
+                  </div>
+                  <input id="display-bitrate" type="range" min="2" max="80" step="1" value="8">
+                </div>
+              </div>
+
+              <div class="switch-list">
+                <label class="switch-row" for="display-hidpi">
+                  <span><strong>HiDPI / Retina</strong><small>让文字与界面更锐利，可能增加带宽</small></span>
+                  <input id="display-hidpi" class="switch-input" type="checkbox"><i></i>
+                </label>
+                <label class="switch-row" for="auto-reconnect">
+                  <span><strong>网络中断后自动重连</strong><small>使用上次设备与画面设置恢复</small></span>
+                  <input id="auto-reconnect" class="switch-input" type="checkbox"><i></i>
+                </label>
+              </div>
+
+              <button id="connect-button" class="button button-primary button-connect" type="button" disabled>
+                <span class="button-icon" aria-hidden="true"></span>
+                <span id="connect-button-label">选择设备后开始扩展</span>
+              </button>
+              <button id="disconnect-button" class="button button-danger button-connect" type="button" hidden>断开扩展屏</button>
+              <p id="connect-hint" class="connect-hint">子端无需确认，主端拥有最高连接权限。</p>
+            </section>
+          </div>
+        </section>
+
+        <section id="receiver-root" class="role-panel receiver-only" hidden>
+          <section id="receiver-overview" class="receiver-stage panel">
+            <video id="remote-video" autoplay playsinline></video>
+            <div id="receiver-idle" class="receiver-idle">
+              <div class="receiver-orb" aria-hidden="true"><i></i><i></i><i></i></div>
+              <span id="receiver-state-kicker" class="section-kicker">子端已就绪</span>
+              <h2 id="receiver-state-title">等待 Mac 主端连接</h2>
+              <p id="receiver-state-description">保持此窗口开启。Mac 会在同一局域网内自动发现这台设备。</p>
+              <div class="listen-address">
+                <span class="status-light is-online"></span>
+                <span>正在监听</span>
+                <strong id="listen-port">端口 —</strong>
+              </div>
+            </div>
+            <button id="play-video" class="play-overlay" type="button" hidden>点击开始播放</button>
+            <div id="receiver-video-overlay" class="video-overlay" hidden>
+              <div>
+                <span class="live-dot"></span>
+                <strong id="remote-host-name">Mac 主端</strong>
+                <small id="remote-address">局域网直连</small>
+              </div>
+              <div class="video-overlay-stats">
+                <span id="receiver-resolution">—</span>
+                <span id="receiver-fps">— FPS</span>
+                <span id="receiver-bitrate">— Mbps</span>
+                <span id="receiver-latency">— ms</span>
+              </div>
+              <div class="overlay-actions">
+                <button id="receiver-disconnect-overlay" class="overlay-button is-danger" type="button">断开</button>
+                <button id="receiver-fullscreen-overlay" class="overlay-button" type="button">全屏</button>
+              </div>
+            </div>
+          </section>
+
+          <div class="receiver-grid">
+            <section class="panel receiver-status-panel">
+              <div class="panel-header">
+                <div>
+                  <span class="section-kicker">运行状态</span>
+                  <h2>接收服务</h2>
+                </div>
+                <span id="receiver-service-badge" class="capability-badge is-success">监听中</span>
+              </div>
+              <div class="status-detail-list">
+                <div><span>设备名称</span><strong id="receiver-name-summary">—</strong></div>
+                <div><span>连接方式</span><strong>WebRTC · 局域网</strong></div>
+                <div><span>访问控制</span><strong>主端优先</strong></div>
+                <div><span>当前主端</span><strong id="receiver-host-summary">未连接</strong></div>
+              </div>
+            </section>
+
+            <section id="receiver-settings" class="panel receiver-settings-panel">
+              <div class="panel-header">
+                <div>
+                  <span class="section-kicker">本机设置</span>
+                  <h2>子端身份</h2>
+                </div>
+              </div>
+              <form id="receiver-settings-form">
+                <div class="receiver-form-grid">
+                  <div class="field-group">
+                    <label for="receiver-name">设备名称</label>
+                    <input id="receiver-name" type="text" maxlength="64" autocomplete="off" required>
+                  </div>
+                  <div class="field-group">
+                    <label for="receiver-port">监听端口</label>
+                    <input id="receiver-port" type="number" min="1" max="65535" inputmode="numeric" required>
+                  </div>
+                </div>
+                <label class="switch-row compact" for="receiver-auto-fullscreen">
+                  <span><strong>连接后自动全屏</strong><small>收到画面后立即进入沉浸显示</small></span>
+                  <input id="receiver-auto-fullscreen" class="switch-input" type="checkbox"><i></i>
+                </label>
+                <button id="save-receiver-settings" class="button button-secondary button-wide" type="submit">保存子端设置</button>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="manual-device-dialog" class="modal">
+      <form id="manual-device-form" method="dialog">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">手动连接</span>
+            <h2>添加 Windows 子端</h2>
+          </div>
+          <button class="modal-close" type="button" data-close-dialog="manual-device-dialog" aria-label="关闭">×</button>
+        </div>
+        <p class="modal-description">输入子端在当前局域网中的 IPv4 地址。连接成功后会自动记住它。</p>
+        <div class="field-group">
+          <label for="manual-name">设备备注</label>
+          <input id="manual-name" type="text" maxlength="64" value="Windows 子端" autocomplete="off">
+        </div>
+        <div class="manual-address-grid">
+          <div class="field-group">
+            <label for="manual-host">局域网 IP 地址</label>
+            <input id="manual-host" type="text" inputmode="decimal" placeholder="192.168.1.120" autocomplete="off" required>
+          </div>
+          <div class="field-group">
+            <label for="manual-port">端口</label>
+            <input id="manual-port" type="number" min="1" max="65535" value="47772" required>
+          </div>
+        </div>
+        <p id="manual-device-error" class="form-error" role="alert"></p>
+        <div class="modal-actions">
+          <button class="button button-quiet" type="button" data-close-dialog="manual-device-dialog">取消</button>
+          <button id="save-manual-device" class="button button-primary" type="submit">验证并添加</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

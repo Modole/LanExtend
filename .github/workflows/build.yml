@@ -1,0 +1,95 @@
+name: Build desktop artifacts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-build:
+    name: macOS Universal build
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run source checks and unit tests
+        run: npm test
+
+      - name: Build unsigned Universal macOS packages
+        run: npm run dist:mac
+
+      - name: Verify arm64 and x86_64 slices
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="native/macos/.build/lanextend-vdisplay"
+          test -f "$helper"
+          lipo "$helper" -verify_arch arm64 x86_64
+
+          app_binary="$(find release -type f -path '*/LanExtend.app/Contents/MacOS/LanExtend' -print -quit)"
+          test -n "$app_binary"
+          lipo "$app_binary" -verify_arch arm64 x86_64
+          file "$helper" "$app_binary"
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanExtend-macOS-universal-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-build:
+    name: Windows x64 build
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run source checks and unit tests
+        run: npm test
+
+      - name: Build unsigned Windows packages
+        run: npm run dist:win
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanExtend-Windows-x64-${{ github.sha }}
+          path: |
+            release/*.exe
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,71 @@
+{
+  "name": "lanextend",
+  "version": "0.1.0",
+  "description": "LAN virtual extended display: macOS host to Windows receiver",
+  "main": "src/main.js",
+  "author": "LanExtend contributors",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev:host": "electron . --role=host --allow-multiple-instances",
+    "dev:receiver": "electron . --role=receiver --allow-multiple-instances",
+    "build:native": "node scripts/build-native.mjs",
+    "pretest": "node scripts/check-source.mjs",
+    "test": "node --test --test-reporter=spec",
+    "verify": "npm run build:native && npm test",
+    "dist:mac": "npm run build:native && electron-builder --mac dmg zip --universal",
+    "dist:win": "electron-builder --win portable zip --x64",
+    "dist": "npm run dist:mac"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "dev.lanextend.desktop",
+    "productName": "LanExtend",
+    "icon": "assets/icon.png",
+    "asar": true,
+    "artifactName": "LanExtend-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "minimumSystemVersion": "14.0",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSScreenCaptureUsageDescription": "LanExtend 需要捕获虚拟扩展屏并将画面发送到您选择的局域网设备。",
+        "NSLocalNetworkUsageDescription": "LanExtend 使用局域网发现并连接您的 Windows 子端。"
+      },
+      "extraResources": [
+        {
+          "from": "native/macos/.build/lanextend-vdisplay",
+          "to": "native/lanextend-vdisplay"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "portable",
+        "zip"
+      ]
+    }
+  }
+}
