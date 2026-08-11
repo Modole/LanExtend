@@ -14,15 +14,23 @@
 
 ## 2. 获取和安装
 
-### CI 构建产物
+### GitHub Releases 与 CI 构建产物
+
+面向用户发布的安装包位于项目的 [GitHub Releases](https://github.com/Modole/LanExtend/releases)：
+
+- Mac：Universal DMG 和 ZIP；目前未配置 Developer ID 正式签名与 Apple 公证；
+- Windows：portable EXE 和 ZIP；目前未配置 Authenticode 签名；
+- 发布页同时提供 SHA-256 校验文件；下载后应先核对哈希和版本说明。
 
 仓库的 `Build desktop artifacts` GitHub Actions 会分别生成 Mac 和 Windows artifacts。它们是开发/验收产物：
 
 - Mac：DMG 和 ZIP；未配置 Developer ID 正式签名与 Apple 公证；
 - Windows：portable EXE 和 ZIP；未配置 Authenticode 签名；
-- artifacts 不是 GitHub Release，也没有自动更新能力。
+- artifacts 只保留有限时间，不等同于维护者发布的 Release。
 
 只从你信任的仓库运行记录下载，并核对工作流对应的提交。正式分发要求见[发布说明](release.md)。
+
+应用启动后会向 GitHub 的公开 Release API 检查一次稳定版本，也可点击侧边栏底部的更新卡片手动复查。发现新版本时，卡片会打开本项目固定的 GitHub Releases 页面；LanExtend **不会后台下载、不会静默安装，也不会绕过系统安全提示**。升级前先断开会话，并让主端与子端安装相同版本。
 
 ### 从源码运行
 
@@ -115,7 +123,7 @@ HiDPI 使同一逻辑尺寸的物理像素数变为四倍。发送端会尝试�
 ## 7. 投放与结束
 
 1. 默认模式连接成功后，把要显示的 Mac 窗口拖过桌面边缘，移入自动创建的虚拟显示器。
-2. Windows 子端可用顶部按钮或画面悬浮按钮进入/退出全屏，按 Esc 也会退出全屏。
+2. Windows 子端可用顶部按钮或画面悬浮按钮进入/退出全屏，按 Esc 也会退出全屏。画面底部的主端名称、分辨率、FPS、码率与操作按钮默认隐藏；在画面内移动鼠标、触摸或用键盘聚焦后会出现，无操作约 2.2 秒后再次隐藏。
 3. 需要切换分辨率时，先点击“断开扩展屏”，修改参数后重新点击“扩展到 …”；不需要单独创建/销毁按钮。
 4. 由 Mac 主端点击断开结束会话。
 5. 断开会清理本会话自动创建的虚拟显示器；直接退出主端也会尝试清理 helper 和显示器。兼容模式下不会删除已有物理/系统显示器。

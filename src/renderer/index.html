@@ -66,6 +66,14 @@
         </nav>
 
         <div class="sidebar-spacer"></div>
+        <button id="update-control" class="sidebar-update" type="button">
+          <span class="update-glyph" aria-hidden="true"></span>
+          <span class="update-copy">
+            <strong id="update-title">检查更新</strong>
+            <small id="update-detail">正在读取当前版本</small>
+          </span>
+          <span class="update-chevron" aria-hidden="true">›</span>
+        </button>
         <div class="privacy-note">
           <span class="lock-mark" aria-hidden="true"></span>
           <div>
@@ -274,7 +282,7 @@
               </div>
             </div>
             <button id="play-video" class="play-overlay" type="button" hidden>点击开始播放</button>
-            <div id="receiver-video-overlay" class="video-overlay" hidden>
+            <div id="receiver-video-overlay" class="video-overlay" aria-hidden="true" hidden>
               <div>
                 <span class="live-dot"></span>
                 <strong id="remote-host-name">Mac 主端</strong>

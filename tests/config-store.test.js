@@ -25,7 +25,9 @@ test('store creates a stable receiver identity and persists settings', (t) => {
   assert.equal(second.get().host.width, 2560);
   assert.equal(second.get().host.height, 1440);
   assert.equal(second.get().host.fps, 60);
-  assert.equal(fs.statSync(path.join(directory, 'settings.json')).mode & 0o777, 0o600);
+  const mode = fs.statSync(path.join(directory, 'settings.json')).mode & 0o777;
+  if (process.platform === 'win32') assert.ok(mode & 0o200, 'settings file should be writable');
+  else assert.equal(mode, 0o600);
 });
 
 test('receiver identity survives a no-op first run', (t) => {

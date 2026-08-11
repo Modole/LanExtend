@@ -12,6 +12,8 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('lanextend', Object.freeze({
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
   rendererReady: () => ipcRenderer.invoke('app:renderer-ready'),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  openLatestRelease: () => ipcRenderer.invoke('updates:open-release'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
   getDevices: () => ipcRenderer.invoke('devices:get'),
   rememberDevice: (device, connected = false) => ipcRenderer.invoke(
