@@ -22,11 +22,14 @@
     receiverPendingIce: [],
     receiverStatsTimer: null,
     receiverStatsPrevious: null,
+    receiverOverlayTimer: null,
     receiverHost: null,
     receiverFullscreen: false,
     earlyReceiverConnection: null,
     earlyReceiverSignals: [],
-    listeningPort: null
+    listeningPort: null,
+    updateInfo: null,
+    updateChecking: false
   };
 
   const byId = (id) => document.getElementById(id);
@@ -226,6 +229,61 @@
     setText('role-label', role === 'host' ? 'macOS 主端 · 最高权限' : 'Windows 子端 · 接收模式');
     setText('page-eyebrow', role === 'host' ? 'MACOS · 主端' : 'WINDOWS · 子端');
     setText('page-title', role === 'host' ? '扩展工作台' : '接收工作台');
+  }
+
+  function renderUpdateControl(kind, title, detail) {
+    const control = byId('update-control');
+    if (!control) return;
+    control.classList.toggle('is-checking', kind === 'checking');
+    control.classList.toggle('is-available', kind === 'available');
+    control.classList.toggle('is-error', kind === 'error');
+    control.disabled = kind === 'checking';
+    setText('update-title', title);
+    setText('update-detail', detail);
+  }
+
+  async function checkForUpdates({ quiet = false } = {}) {
+    if (state.updateChecking) return;
+    state.updateChecking = true;
+    renderUpdateControl('checking', '正在检查更新', '连接 GitHub Releases…');
+    try {
+      const info = await api.checkForUpdates();
+      if (!info
+        || typeof info.currentVersion !== 'string'
+        || typeof info.latestVersion !== 'string'
+        || typeof info.updateAvailable !== 'boolean') {
+        throw new Error('更新服务返回了无法识别的信息');
+      }
+      state.updateInfo = info;
+      if (info.updateAvailable) {
+        renderUpdateControl('available', `发现 v${info.latestVersion}`, '点击前往 GitHub 下载');
+        if (!quiet) toast('发现新版本', `LanExtend v${info.latestVersion} 已可下载`);
+      } else {
+        renderUpdateControl('current', '已是最新版本', `当前 v${info.currentVersion} · 点击复查`);
+        if (!quiet) toast('无需更新', `当前已是 LanExtend v${info.currentVersion}`);
+      }
+    } catch (error) {
+      state.updateInfo = null;
+      renderUpdateControl('error', '暂时无法检查更新', '点击重试');
+      if (!quiet) toast('检查更新失败', errorText(error), 'warning', 6200);
+    } finally {
+      state.updateChecking = false;
+    }
+  }
+
+  function bindUpdateUi() {
+    renderUpdateControl('idle', '检查更新', `当前 v${state.bootstrap.appVersion || '0.0.0'}`);
+    byId('update-control')?.addEventListener('click', async () => {
+      if (state.updateInfo?.updateAvailable) {
+        try {
+          await api.openLatestRelease();
+        } catch (error) {
+          toast('无法打开下载页', errorText(error), 'error');
+        }
+        return;
+      }
+      await checkForUpdates();
+    });
   }
 
   function bindCommonUi() {
@@ -1181,6 +1239,38 @@
     const video = byId('remote-video');
     video.addEventListener('loadedmetadata', renderReceiverVideoDimensions);
     video.addEventListener('resize', renderReceiverVideoDimensions);
+    const stage = byId('receiver-overview');
+    const overlay = byId('receiver-video-overlay');
+    stage.addEventListener('pointermove', () => revealReceiverOverlay());
+    stage.addEventListener('pointerleave', hideReceiverOverlay);
+    stage.addEventListener('touchstart', () => revealReceiverOverlay(3200), { passive: true });
+    stage.addEventListener('focusin', () => revealReceiverOverlay(3200));
+    overlay.addEventListener('pointerenter', () => clearTimeout(state.receiverOverlayTimer));
+    overlay.addEventListener('pointerleave', () => revealReceiverOverlay(900));
+  }
+
+  function hideReceiverOverlay() {
+    clearTimeout(state.receiverOverlayTimer);
+    state.receiverOverlayTimer = null;
+    const overlay = byId('receiver-video-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('is-visible');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+
+  function revealReceiverOverlay(duration = 2200) {
+    const overlay = byId('receiver-video-overlay');
+    if (!overlay || overlay.hidden || !byId('receiver-overview')?.classList.contains('has-video')) return;
+    clearTimeout(state.receiverOverlayTimer);
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    state.receiverOverlayTimer = window.setTimeout(() => {
+      if (overlay.matches(':hover') || overlay.matches(':focus-within')) {
+        revealReceiverOverlay(900);
+        return;
+      }
+      hideReceiverOverlay();
+    }, duration);
   }
 
   function renderListeningStatus() {
@@ -1310,8 +1400,7 @@
     video.srcObject = stream;
     byId('receiver-overview').classList.add('has-video');
     byId('receiver-video-overlay').hidden = false;
-    byId('receiver-video-overlay').classList.add('is-visible');
-    window.setTimeout(() => byId('receiver-video-overlay')?.classList.remove('is-visible'), 2600);
+    hideReceiverOverlay();
     try {
       await video.play();
       byId('play-video').hidden = true;
@@ -1387,6 +1476,7 @@
   }
 
   function cleanupReceiverPeer(clearSession = true) {
+    hideReceiverOverlay();
     clearInterval(state.receiverStatsTimer);
     state.receiverStatsTimer = null;
     state.receiverStatsPrevious = null;
@@ -1454,8 +1544,9 @@
     state.devices = Array.isArray(bootstrap.devices) ? bootstrap.devices : [];
     state.virtualDisplayRunning = Boolean(bootstrap.virtualDisplay?.running);
     setRoleVisibility(state.role);
-    setText('app-version', `局域网扩展屏 · ${bootstrap.appVersion || '0.1.0'}`);
+    setText('app-version', `局域网扩展屏 · ${bootstrap.appVersion || '0.2.0'}`);
     setText('protocol-chip', `协议 v${bootstrap.protocolVersion}`);
+    bindUpdateUi();
 
     if (state.role === 'host') {
       bindHostUi();
@@ -1497,6 +1588,7 @@
     const boot = byId('boot-screen');
     boot.classList.add('is-dismissing');
     window.setTimeout(() => boot.remove(), 300);
+    window.setTimeout(() => checkForUpdates({ quiet: true }), 1800);
   }
 
   initialize().catch((error) => {

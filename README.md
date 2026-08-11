@@ -27,7 +27,9 @@ macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它�
 - Windows 子端通过 UDP 广播，Mac 主端监听并合并本机记忆列表。
 - WebSocket 信令、协议版本/消息大小/字段校验、单主端占用保护。
 - 主端主动连接、断开；子端可全屏并在会话期间阻止显示器休眠。
+- 子端画面信息条默认隐藏，鼠标移动、触摸或键盘聚焦时短暂显示，避免遮挡扩展桌面。
 - JSON 设置持久化，最多记忆 32 台设备；离线设备仍可显示和删除。
+- 启动时及侧边栏手动检查 GitHub Releases；发现新版本后打开官方发布页，由用户下载并安装。
 - Node 单元测试、源码语法检查，以及 macOS/Windows GitHub Actions 构建产物。
 
 ## 快速开始
@@ -74,7 +76,7 @@ npm run dev:host
 5. 如果私有虚拟显示不可用，GUI 会切到“已有显示器”兼容模式；此时才需要手动选择捕获源。选择已有屏会发送该屏全部内容，请先清除敏感信息。
 6. 使用主端“断开扩展屏”结束投放；由本会话自动创建的虚拟显示器会随断开清理。
 
-完整操作和未签名产物说明见[用户指南](docs/user-guide.md)。
+完整操作和未签名产物说明见[用户指南](docs/user-guide.md)。公开安装包可从 [GitHub Releases](https://github.com/Modole/LanExtend/releases) 获取。
 
 ## 架构概览
 
@@ -109,7 +111,7 @@ flowchart LR
 - [故障排除](docs/troubleshooting.md)：发现、端口、权限、黑屏、连接和性能问题。
 - [验收清单](docs/acceptance.md)：自动化与双机手工验收，包含尚未验证项的记录方式。
 - [开源方案调研](docs/open-source-research.md)：OpenDisplay、VoidDisplay、DeskPad、Deskreen、Weylus、Sunshine 等方案与许可证矩阵。
-- [发布说明](docs/release.md)：CI artifacts、签名/公证边界和正式发布门槛。
+- [发布说明](docs/release.md)：GitHub Releases、CI artifacts、更新检查、签名/公证边界和正式发布门槛。
 - [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ## 开源与许可证边界

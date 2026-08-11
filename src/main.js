@@ -8,6 +8,7 @@ const {
   desktopCapturer,
   ipcMain,
   Menu,
+  net,
   powerSaveBlocker,
   screen,
   session,
@@ -18,6 +19,13 @@ const { ConfigStore } = require('./core/config-store');
 const { PROTOCOL_VERSION } = require('./core/constants');
 const { DiscoveryAdvertiser, DiscoveryListener, SignalServer } = require('./core/network');
 const { isPrivateIPv4, isValidPort } = require('./core/protocol');
+const {
+  MAX_RELEASE_RESPONSE_BYTES,
+  RELEASE_API_URL,
+  RELEASE_PAGE_URL,
+  parseReleasePageUrl,
+  parseReleasePayload
+} = require('./core/updates');
 const { VirtualDisplayManager, helperPath } = require('./core/virtual-display');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -63,6 +71,59 @@ function mediaPermissionStatus() {
     return systemPreferences.getMediaAccessStatus('screen');
   } catch {
     return 'unknown';
+  }
+}
+
+async function checkReleasePageFallback(signal) {
+  const response = await net.fetch(RELEASE_PAGE_URL, {
+    method: 'HEAD',
+    redirect: 'manual',
+    headers: { 'User-Agent': `LanExtend/${app.getVersion()}` },
+    signal
+  });
+  const location = response.headers.get('location');
+  if (response.status < 300 || response.status >= 400 || !location) {
+    throw new Error(`GitHub 发布页返回 ${response.status}`);
+  }
+  const releaseUrl = new URL(location, RELEASE_PAGE_URL).toString();
+  return parseReleasePageUrl(releaseUrl, app.getVersion());
+}
+
+async function checkForUpdates() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await net.fetch(RELEASE_API_URL, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `LanExtend/${app.getVersion()}`,
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      signal: controller.signal
+    });
+    if (response.status === 403 || response.status === 429) {
+      return await checkReleasePageFallback(controller.signal);
+    }
+    if (!response.ok) {
+      if (response.status === 404) throw new Error('项目暂未发布可下载版本');
+      throw new Error(`GitHub 更新服务返回 ${response.status}`);
+    }
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RELEASE_RESPONSE_BYTES) {
+      throw new Error('GitHub 版本信息超过大小限制');
+    }
+    const raw = await response.text();
+    if (Buffer.byteLength(raw, 'utf8') > MAX_RELEASE_RESPONSE_BYTES) {
+      throw new Error('GitHub 版本信息超过大小限制');
+    }
+    return parseReleasePayload(JSON.parse(raw), app.getVersion());
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('检查更新超时，请确认网络后重试');
+    if (error instanceof SyntaxError) throw new Error('GitHub 返回了无法识别的版本信息');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -267,6 +328,11 @@ function registerIpc() {
         scaleFactor: display.scaleFactor
       }))
     };
+  });
+  ipcMain.handle('updates:check', () => checkForUpdates());
+  ipcMain.handle('updates:open-release', async () => {
+    await shell.openExternal(RELEASE_PAGE_URL);
+    return true;
   });
 
   ipcMain.handle('settings:update', async (_event, patch) => {

@@ -1,6 +1,6 @@
 {
   "name": "lanextend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "LAN virtual extended display: macOS host to Windows receiver",
   "main": "src/main.js",
   "author": "LanExtend contributors",
@@ -18,8 +18,8 @@
     "pretest": "node scripts/check-source.mjs",
     "test": "node --test --test-reporter=spec",
     "verify": "npm run build:native && npm test",
-    "dist:mac": "npm run build:native && electron-builder --mac dmg zip --universal",
-    "dist:win": "electron-builder --win portable zip --x64",
+    "dist:mac": "npm run build:native && electron-builder --mac dmg zip --universal --publish never",
+    "dist:win": "electron-builder --win portable zip --x64 --publish never",
     "dist": "npm run dist:mac"
   },
   "dependencies": {

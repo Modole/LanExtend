@@ -2,14 +2,14 @@
 
 ## 1. 当前交付级别
 
-`.github/workflows/build.yml` 生成的是**开发/验收 artifacts**，不是面向最终用户的正式 Release：
+`.github/workflows/build.yml` 生成的是**开发/验收 artifacts**；维护者在同一提交的两个平台 job 通过后，可另行创建面向用户的 GitHub Release：
 
 - macOS job：测试、构建含 `arm64`/`x86_64` 的 universal2 私有 API helper，并以 `--universal` 打包 DMG/ZIP；
 - Windows job：测试，打包 portable EXE/ZIP；
 - 两端均未配置正式代码签名；Mac 未公证；
-- workflow 不创建 GitHub Release、不上传商店、不自动更新。
+- workflow 不自动创建 GitHub Release、不上传商店，也不执行静默更新。
 
-Artifacts 保留 14 天，名称包含平台；实际文件名由 electron-builder 的 `LanExtend-${version}-${os}-${arch}.${ext}` 规则生成。
+Artifacts 保留 14 天，名称包含平台；实际文件名由 electron-builder 的 `LanExtend-${version}-${os}-${arch}.${ext}` 规则生成。发布到 Releases 时还应上传 SHA-256 校验文件，并在正文中写明签名状态与已知限制。
 
 ## 2. 触发与权限
 
@@ -61,7 +61,7 @@ npm test
 npm run dist:win
 ```
 
-本地构建只能用于调试/验收。正式包应来自可审计、受保护且保存 provenance 的发布工作流。
+本地构建只能用于调试/验收。当前开发预览 Release 可由维护者上传经测试且附哈希的候选包；正式产品包仍应来自可审计、受保护且保存 provenance 的签名发布工作流。
 
 ## 5. 正式发布前阻塞项
 
@@ -110,7 +110,15 @@ npm run dist:win
 
 `PROTOCOL_VERSION` 与应用 SemVer 独立。只要线协议有不兼容变化，就必须提升协议版本并在发布说明中列出主/子端兼容矩阵。
 
-由于无自动更新，主端和子端应从同一 Release 安装。协议不匹配时应失败关闭，不尝试静默降级。
+应用会在启动时或用户点击侧边栏更新卡片后查询 GitHub 的最新稳定 Release；发现新版只打开本仓库的固定 HTTPS 发布页，不会下载或静默安装。主端和子端应从同一 Release 安装。协议不匹配时应失败关闭，不尝试静默降级。
+
+版本检查的发布契约：
+
+- tag 必须是稳定三段 SemVer，例如 `v0.2.0`；draft 和 prerelease 不会作为最新稳定版本；
+- 公开元数据端点固定为 `api.github.com/repos/Modole/LanExtend/releases/latest`；遇到 GitHub API 速率限制时，只解析本仓库 `/releases/latest` 的 HTTPS 重定向作为降级；
+- 下载页固定限制在 `https://github.com/Modole/LanExtend/releases/` 路径下；
+- 更新失败不影响局域网扩展屏核心功能，用户可在侧边栏重试；
+- 不把 Release 元数据视为安装包真实性证明，仍需核对哈希，并在正式产品阶段补签名、公证和安全升级机制。
 
 ## 8. 发布页必须包含的限制
 

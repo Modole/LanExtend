@@ -2,7 +2,7 @@
 
 ## 1. 安全结论
 
-LanExtend v0.1.0 是**无认证的可信内网 MVP**。只有在你控制网络、信任同网设备并能限制防火墙范围时才应运行。它不适合公网、端口转发、共享 VPN、访客 Wi‑Fi、酒店/机场网络、校园网或无法识别其他终端的办公网。
+LanExtend v0.2.0 是**无认证的可信内网 MVP**。只有在你控制网络、信任同网设备并能限制防火墙范围时才应运行。它不适合公网、端口转发、共享 VPN、访客 Wi‑Fi、酒店/机场网络、校园网或无法识别其他终端的办公网。
 
 “Mac 主端权限最高”目前表示：
 
@@ -107,12 +107,14 @@ macOS 主端通过运行时类名使用未公开的 `CGVirtualDisplay`、`CGVirt
 
 ## 7. 未签名构建与供应链
 
-当前 GitHub Actions artifacts 只用于开发验收：
+当前 GitHub Actions artifacts 只用于开发验收；GitHub Releases 可分发维护者选定的候选包：
 
 - 没有 Apple Developer ID 签名/公证；
 - 没有 Windows Authenticode 签名；
-- 没有发布证书固定、自动更新、SBOM 或独立可复现构建声明；
+- 没有发布证书固定、静默自动安装、SBOM 或独立可复现构建声明；
 - workflow 中的 `npm ci` 会从 npm registry 获取锁定包，仍需供应链治理。
+
+应用的版本检查只向 `api.github.com/repos/Modole/LanExtend/releases/latest` 请求公开发布元数据；遇到 API 速率限制时，只解析本仓库 `/releases/latest` 的 HTTPS 重定向。应用只允许打开本仓库固定的 HTTPS Releases 页面。请求不会上传设备 UUID、局域网地址、设置或画面，但 GitHub 仍会看到普通 HTTPS 请求所包含的公网 IP 和网络元数据。安装包不会自动下载或执行，用户必须自行核对发布说明与 SHA-256 后安装。
 
 不要指导普通用户长期关闭 Gatekeeper/SmartScreen。内部测试可以在确认提交、构建日志和哈希后使用系统提供的单次“仍要打开”流程。正式发布必须配置签名、证书保护、公证、哈希、依赖扫描和回滚。
 

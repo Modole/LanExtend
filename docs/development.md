@@ -169,7 +169,7 @@ npm test
 npm run dist:win
 ```
 
-生成 portable EXE 和 ZIP。当前没有 MSI、系统服务、驱动、自动更新或 Authenticode 签名。Windows SmartScreen 可能提示未知发布者，这是正式发布前的阻塞项，不应通过文案声称“安全”来规避。
+生成 portable EXE 和 ZIP。当前没有 MSI、系统服务、驱动、静默自动安装或 Authenticode 签名。应用只检查 GitHub 最新 Release 并打开固定下载页；Windows SmartScreen 可能提示未知发布者，这是正式发布前的阻塞项，不应通过文案声称“安全”来规避。
 
 ## 8. GitHub Actions
 
@@ -184,7 +184,7 @@ npm run dist:win
 1. `macos-build`：`npm ci` → `npm test` → `npm run dist:mac` → 上传 DMG/ZIP；
 2. `windows-build`：`npm ci` → `npm test` → `npm run dist:win` → 上传 portable EXE/ZIP。
 
-workflow 使用最小 `contents: read` 权限，并上传 14 天 artifacts。它不创建 Release、不签名、不公证、不上传商店。
+workflow 使用最小 `contents: read` 权限，并上传 14 天 artifacts。它不自动创建 Release、不签名、不公证、不上传商店；维护者可在两个 job 均通过后，另外创建 GitHub Release 并上传同一版本的候选包与哈希。
 
 ## 9. 发布前版本与合规检查
 
