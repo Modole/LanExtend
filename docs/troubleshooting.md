@@ -72,6 +72,15 @@ GUI 接受偶数逻辑宽 `800–7680`、偶数逻辑高 `600–4320`、`15–60
 
 如果系统显示器列表也没有该显示器，回到 helper 排障，而不是继续排查 WebRTC。
 
+### 已授权但应用仍显示“需要屏幕录制权限”
+
+1. 完全退出所有 LanExtend 进程，确认没有从 DMG、下载目录、源码目录或 `release/` 运行另一份副本。
+2. 只保留并启动 `/Applications/LanExtend.app`；不要从构建输出双击应用。
+3. 在系统屏幕录制列表中关闭旧 LanExtend 项，再为当前 `/Applications` 副本开启；返回窗口后应用会自动重新检测。
+4. 如果替换了未使用 Developer ID 正式签名的开发包，macOS 仍可能要求重新授权。用于公开稳定分发的根本方案是 Developer ID 签名和公证。
+
+开发包会对整个应用和原生 helper 做 ad-hoc 签名，以避免“应用包完全未签名”；这不等同于 Developer ID，不能提供发布者身份、跨版本稳定要求或公证。
+
 ## 4. Windows 子端未被自动发现
 
 按顺序检查：
@@ -107,7 +116,7 @@ MVP 只接受：`10/8`、`172.16/12`、`192.168/16`、`127/8`、`169.254/16` IPv
 
 ### 关闭码 1008 / 信令格式无效
 
-双端协议版本或消息实现不一致，或者同网有非 LanExtend 客户端连接。确认两端来自同一提交/版本，检查 `protocol: 1`，不要把完整 SDP/ICE 发布到公开 issue。
+双端协议版本或消息实现不一致，或者同网有非 LanExtend 客户端连接。确认两端来自同一提交/版本，当前版本应显示 `协议 v2`，不要把完整 SDP/ICE 发布到公开 issue。
 
 ### `ECONNREFUSED`
 
@@ -169,7 +178,32 @@ MVP 没有 STUN/TURN，只面向可直接互通的局域网。检查：
 - 若应用在断开后仍阻止显示休眠，正常退出子端并记录复现；会话关闭处理应停止 blocker。
 - 若窗口在睡眠/唤醒后黑屏，断开并重新建立 WebRTC；MVP 尚未声明完整的睡眠恢复保证。
 
-## 11. 记忆设备错误或配置损坏
+## 11. 键鼠或剪贴板共享问题
+
+### 鼠标到边缘后没有切换
+
+1. 确认主端“键鼠与剪贴板共享”显示“共享运行中”。
+2. 在 macOS“隐私与安全性 → 辅助功能”允许当前 LanExtend 副本；源码、构建目录和 `/Applications` 中的副本可能被系统视为不同程序。
+3. 在布局画布确认橙色 Windows 矩形与目标 Mac 矩形真正贴边，没有缝隙或重叠；可先点“自动排列”。
+4. 把边缘停留临时调为 `0 ms`，持续向该边缘移动鼠标测试。
+5. 源码版执行 `native/macos/.build/lanextend-input --probe`，应返回 `trusted: true`。
+
+### 控制权没有返回 Mac
+
+按 `Control + Option + Command + Esc`。该组合由 Mac helper 本地处理，会释放 Windows 上所有已按下的键并把鼠标送回进入时的 Mac 显示器。helper 进程退出后 macOS 也会恢复正常本地输入。
+
+### Windows 能移动鼠标但快捷键不符合预期
+
+默认按物理键映射：Mac `Command` 对应 Windows `Ctrl`、`Option` 对应 `Alt`、Mac `Control` 对应 Windows 键。当前版本没有自定义键位映射页面。
+
+### 剪贴板没有同步
+
+- 当前仅同步纯文本，不同步文件、图片、富文本或剪贴板历史。
+- 确认主端开关已启用，并且键鼠共享会话仍在线。
+- 超过 128 KiB 的文本会被忽略；缩短文本后重试。
+- 部分密码管理器或受保护应用会阻止读取系统剪贴板。
+
+## 12. 记忆设备错误或配置损坏
 
 ### IP 变更
 
@@ -183,11 +217,11 @@ MVP 没有 STUN/TURN，只面向可直接互通的局域网。检查：
 
 完全退出应用，备份后重命名 Electron userData 目录中的 `settings.json`。不要直接删除整个 userData 目录，里面可能有 Chromium/Electron 其他状态。
 
-## 12. GitHub Actions 构建失败
+## 13. GitHub Actions 构建失败
 
 - `npm ci` 失败：确认 `package.json` 与 `package-lock.json` 同步、registry 可用。
 - Mac 原生构建失败：查看 `xcrun`/SDK/Clang 错误和 Objective-C `-Werror` 输出。
-- electron-builder 找不到 helper：确认 `npm run dist:mac` 先运行 native build，且 `.build/lanextend-vdisplay` 存在。
+- electron-builder 找不到 helper：确认 `npm run dist:mac` 先运行 native build，且 `.build/lanextend-vdisplay` 与 `.build/lanextend-input` 都存在。
 - 上传提示无匹配文件：检查 `release/` 与 `artifactName`，不要用 `if-no-files-found: ignore` 隐藏打包失败。
 - Windows 构建意外尝试 Mac helper：`build-native.mjs` 在非 macOS 应明确打印 skip 并成功退出。
 

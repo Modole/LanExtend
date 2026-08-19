@@ -1,6 +1,6 @@
 'use strict';
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const DISCOVERY_PORT = 47_771;
 const SIGNAL_PORT = 47_772;
 const MAX_SIGNAL_BYTES = 256 * 1024;
@@ -23,6 +23,13 @@ const DEFAULTS = Object.freeze({
     name: null,
     port: SIGNAL_PORT,
     autoFullscreen: true
+  },
+  inputSharing: {
+    lastDeviceId: null,
+    clipboard: true,
+    autoReconnect: true,
+    edgeDelayMs: 80,
+    layouts: []
   },
   rememberedDevices: []
 });

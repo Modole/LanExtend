@@ -2,9 +2,9 @@
 
 ## 1. 目标与非目标
 
-LanExtend 的 MVP 目标是让一台 macOS 14+ 电脑把一块“真正的扩展桌面”显示到同一可信局域网中的一台 Windows 10/11 电脑。主端决定创建/销毁显示器、选择捕获源、连接/断开和画质参数；子端只提供发现、信令和显示窗口。
+LanExtend 提供两个独立目标：让 macOS 14+ 把一块“真正的扩展桌面”显示到 Windows 10/11，或在两台设备各自显示本地内容时，让 Mac 的键盘、鼠标和纯文本剪贴板无缝切换到 Windows。主端决定连接、布局和功能开关。
 
-当前非目标包括音频、远端键鼠/触控、HDR、跨公网、NAT 穿透、IPv6、多子端并发、后台服务、账号体系、设备配对和企业级策略管理。
+当前非目标包括音频、触控、文件/图片剪贴板、HDR、跨公网、NAT 穿透、IPv6、多子端并发、后台服务、账号体系和企业级策略管理。
 
 ## 2. 组件与职责
 
@@ -14,6 +14,8 @@ LanExtend 的 MVP 目标是让一台 macOS 14+ 电脑把一块“真正的扩展
 | 沙箱渲染进程 | 两端 | GUI、WebRTC 协商、主端捕获、子端播放和状态展示 | 当前会话中断，可重启应用 |
 | preload 桥 | 两端 | 暴露白名单 IPC，隔离 Node 能力 | GUI 无法调用系统能力 |
 | `lanextend-vdisplay` | macOS | 探测/调用私有 `CGVirtualDisplay` API，拥有一块虚拟显示器 | 虚拟显示器被系统移除 |
+| `lanextend-input` | macOS | 监听屏幕边缘、接管全局键鼠并把事件写为 JSONL | 键鼠共享停止，Mac 本地输入恢复 |
+| `lanextend-input.ps1` | Windows | 常驻读取 JSONL，调用 Win32 API 注入键鼠 | Windows 不再接收远端输入 |
 | UDP advertiser | Windows | 每 1.5 秒广播子端元数据 | 自动发现失效，手动地址仍可用 |
 | UDP listener | macOS | 监听并维护在线设备，6 秒未见即离线 | 自动发现失效 |
 | WebSocket server | Windows | 接受一个主端并转发 WebRTC 信令 | 无法建会话；已有媒体也可能终止 |
@@ -53,6 +55,7 @@ sequenceDiagram
 - 主端必须先收到 `welcome` 并取得子端真实 UUID，再用该 UUID 生成稳定虚拟显示 serial、创建显示器和发起 offer；手动地址占位 ID 会在此时被真实 ID 替换。
 - UDP 发现只携带定位和能力信息；收到报文时使用 UDP 数据包的来源 IPv4 作为子端地址，不信任报文自报地址。
 - WebSocket 只传 `hello/offer/answer/ice/ping/pong/disconnect` 等 JSON 信令，不承载视频帧。
+- 键鼠模式复用同一 WebSocket，增加 `control/input/clipboard` 消息；它不创建 WebRTC 或虚拟显示器。
 - 子端拒绝第二个同时在线的主端，返回 WebSocket 关闭码 `1013`。
 
 ### 媒体面
@@ -78,6 +81,17 @@ sequenceDiagram
 
 HiDPI 模式把 GUI 请求宽高视为**逻辑桌面尺寸**，物理帧缓冲宽高各为 2×。例如 1920×1080 HiDPI 对应 1920×1080 逻辑空间和 3840×2160 物理帧缓冲。像素数变为非 HiDPI 同逻辑尺寸的四倍，会显著增加 WindowServer、捕获和内存开销；发送端会尝试按所选逻辑分辨率约束/缩放 WebRTC，但最终编码尺寸必须以运行统计为准。
 
+### 键鼠共享生命周期
+
+1. GUI 读取 Mac 当前显示器坐标，并把 Windows 屏幕作为可拖拽矩形保存到同一逻辑坐标系。
+2. 主端发出 `control/share-start`；Windows 启动常驻输入 helper 并返回主屏尺寸。
+3. Mac 启动 `lanextend-input`。未跨边缘时事件原样交给 macOS，只观察鼠标位置。
+4. 鼠标穿过与 Windows 矩形相邻的边缘后，helper 暂停向本机投递键鼠事件；主端把绝对鼠标位置、按键和滚轮通过 WebSocket 发送。
+5. Windows helper 使用 Win32 API 执行输入。返回相邻边缘、断线或停止时会先释放全部按键。
+6. `Control + Option + Command + Esc` 是本地紧急返回组合，不会发送给 Windows。
+
+共享期间两端每 500 ms 检查纯文本剪贴板。启动共享时以 Mac 当前纯文本为初始值，之后任一端内容变化都会发送 `clipboard` 消息；应用远端内容时先更新本地去重值，避免形成回传循环。Windows 布局使用主显示器物理像素宽高，使高 DPI 缩放下的绝对光标坐标与 Win32 一致。
+
 ## 5. 配置与“记忆”模型
 
 配置位于 Electron `app.getPath('userData')/settings.json`，写入时先创建同目录临时文件再原子重命名；类 Unix 平台创建文件时请求 `0600` 权限。数据模型版本当前为 `schemaVersion: 1`。
@@ -92,6 +106,9 @@ settings.json
 │   ├── id（首次运行生成并保持）
 │   ├── name / port
 │   └── autoFullscreen
+├── inputSharing
+│   ├── lastDeviceId / clipboard / autoReconnect / edgeDelayMs
+│   └── layouts[]（每个设备的 x/y/width/height）
 └── rememberedDevices[最多 32]
     └── id / name / host / port / lastSeen / lastConnected
 ```
@@ -104,7 +121,7 @@ settings.json
 | --- | --- | --- | --- |
 | 屏幕录制 | 必需 | 不需要 | 缺失时无法可靠列出/捕获扩展屏，常见表现是黑屏 |
 | 本地网络 | 必需 | Windows 防火墙放行 | 自动发现和局域网连接所需 |
-| 辅助功能 | 不需要 | 不需要 | MVP 没有输入回传 |
+| 辅助功能 | 键鼠共享必需 | 不需要 | macOS 全局事件 tap 的系统要求 |
 | 麦克风/系统音频 | 不需要 | 不需要 | MVP 没有音频 |
 | 管理员/root | 通常不需要 | 通常不需要 | 开放普通高位端口，不安装驱动/服务 |
 
@@ -140,4 +157,4 @@ MVP 没有认证和信令机密性，因此安全性依赖网络隔离、端点�
 3. 增加明确的会话确认弹窗、设备指纹、撤销和连接审计。
 4. 增加端到端统计、崩溃恢复、编码器能力探测和分辨率/码率自适应。
 5. 完成 Apple Silicon/Intel、Windows 10/11、Wi-Fi/以太网组合的长期真机矩阵。
-6. 再评估音频、输入回传、多子端与 NAT 场景；每项都扩大权限和攻击面，应单独设计。
+6. 再评估音频、触控、文件剪贴板、多子端与 NAT 场景；每项都应单独设计和验收。

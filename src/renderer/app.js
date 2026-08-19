@@ -1,8 +1,10 @@
 (() => {
   'use strict';
 
-  const PROTOCOL_VERSION = 1;
-  const SIGNAL_TYPES = new Set(['hello', 'offer', 'answer', 'ice', 'disconnect', 'ping', 'pong']);
+  const PROTOCOL_VERSION = 2;
+  const SIGNAL_TYPES = new Set([
+    'hello', 'offer', 'answer', 'ice', 'disconnect', 'ping', 'pong', 'control', 'input', 'clipboard'
+  ]);
   const DEFAULT_SIGNAL_PORT = 47772;
   const api = window.lanextend;
 
@@ -16,6 +18,7 @@
     reconnectTimer: null,
     reconnectCountdownTimer: null,
     reconnectAttempt: 0,
+    reconnectMode: 'display',
     virtualDisplayRunning: false,
     receiverSession: null,
     receiverPeer: null,
@@ -29,7 +32,14 @@
     earlyReceiverSignals: [],
     listeningPort: null,
     updateInfo: null,
-    updateChecking: false
+    updateChecking: false,
+    screenPermission: 'unknown',
+    inputLayout: null,
+    inputAccessibility: false,
+    inputStatus: { supported: false, running: false, active: false },
+    receiverInputStatus: { running: false, active: false, clipboard: false },
+    pendingClipboard: null,
+    inputDrag: null
   };
 
   const byId = (id) => document.getElementById(id);
@@ -207,6 +217,24 @@
         || new TextEncoder().encode(message.reason).byteLength > 120)) {
       throw new Error('收到的断开信令无效');
     }
+    if (message.type === 'control') {
+      const actions = new Set(['share-start', 'share-ready', 'share-stop', 'active', 'inactive', 'error']);
+      if (!actions.has(message.action)) throw new Error('收到的键鼠控制信令无效');
+      if (message.screen !== undefined
+        && (!message.screen || !Number.isInteger(message.screen.width) || !Number.isInteger(message.screen.height))) {
+        throw new Error('收到的屏幕信息无效');
+      }
+    }
+    if (message.type === 'input') {
+      const kinds = new Set(['pointer', 'button', 'wheel', 'key', 'releaseAll']);
+      if (!message.event || !kinds.has(message.event.kind)) throw new Error('收到的输入事件无效');
+    }
+    if (message.type === 'clipboard'
+      && (typeof message.text !== 'string'
+        || new TextEncoder().encode(message.text).byteLength > 128 * 1024
+        || typeof message.revision !== 'string')) {
+      throw new Error('收到的剪贴板消息无效');
+    }
     return message;
   }
 
@@ -356,6 +384,20 @@
         setSidebarStatus('error', '接收服务异常', errorText(event?.message));
       }
     });
+    api.onInputOutbound((payload) => {
+      const connection = state.hostConnection;
+      if (state.role !== 'host' || !connection || connection.intentional) return;
+      if (!payload?.type || !SIGNAL_TYPES.has(payload.type)) return;
+      sendHostSignal(connection, makeSignal(payload.type, payload));
+    });
+    api.onInputHostStatus((status) => {
+      state.inputStatus = { ...state.inputStatus, ...status };
+      if (state.role === 'host') renderInputStatus();
+    });
+    api.onInputReceiverStatus((status) => {
+      if (state.role === 'receiver') renderReceiverInputStatus(status);
+    });
+    api.onInputWarning((event) => toast('键鼠共享提示', errorText(event?.message), 'warning', 6200));
   }
 
   function applyHostSettings(settings) {
@@ -373,6 +415,12 @@
     byId('resolution-preset').value = option ? preset : 'custom';
     byId('custom-resolution').hidden = Boolean(option);
     state.selectedDeviceId = host.lastDeviceId || null;
+    const input = settings.inputSharing || {};
+    byId('clipboard-sync').checked = input.clipboard !== false;
+    byId('input-auto-reconnect').checked = input.autoReconnect !== false;
+    byId('input-edge-delay').value = String(Number.isInteger(input.edgeDelayMs) ? input.edgeDelayMs : 80);
+    setText('input-edge-delay-output', `${byId('input-edge-delay').value} ms`);
+    if (!state.selectedDeviceId && input.lastDeviceId) state.selectedDeviceId = input.lastDeviceId;
   }
 
   function readHostOptions() {
@@ -399,6 +447,166 @@
       lastDeviceId: state.selectedDeviceId,
       lastSourceId: byId('capture-source').value || state.bootstrap.settings.host.lastSourceId || null
     };
+  }
+
+  function localDisplayRects() {
+    return (state.bootstrap?.displays || []).map((display, index) => ({
+      id: String(display.id),
+      label: display.label || `Mac 显示器 ${index + 1}`,
+      x: Math.round(display.bounds?.x || 0),
+      y: Math.round(display.bounds?.y || 0),
+      width: Math.max(1, Math.round(display.bounds?.width || 1920)),
+      height: Math.max(1, Math.round(display.bounds?.height || 1080))
+    }));
+  }
+
+  function defaultInputLayout(device) {
+    const locals = localDisplayRects();
+    const top = Math.min(...locals.map((display) => display.y));
+    const topRow = locals.filter((display) => display.y === top);
+    const anchor = topRow.reduce((best, display) => (
+      !best || display.x + display.width > best.x + best.width ? display : best
+    ), null) || { x: 0, y: 0, width: 1920, height: 1080 };
+    return {
+      deviceId: device?.id || '',
+      x: anchor.x + anchor.width,
+      y: anchor.y,
+      width: Math.round(device?.display?.width || 1920),
+      height: Math.round(device?.display?.height || 1080)
+    };
+  }
+
+  function ensureInputLayout(reset = false) {
+    const device = state.devices.find((item) => item.id === state.selectedDeviceId);
+    if (!device) {
+      state.inputLayout = null;
+      return null;
+    }
+    if (!reset && state.inputLayout?.deviceId === device.id) return state.inputLayout;
+    const saved = (state.bootstrap.settings.inputSharing?.layouts || [])
+      .find((layout) => layout.deviceId === device.id);
+    state.inputLayout = reset ? defaultInputLayout(device) : { ...(saved || defaultInputLayout(device)) };
+    if (device.display) {
+      state.inputLayout.width = device.display.width;
+      state.inputLayout.height = device.display.height;
+    }
+    return state.inputLayout;
+  }
+
+  function readInputOptions() {
+    const layout = ensureInputLayout();
+    const previous = state.bootstrap.settings.inputSharing || {};
+    const layouts = (previous.layouts || []).filter((item) => item.deviceId !== layout?.deviceId);
+    if (layout) layouts.push({ ...layout });
+    return {
+      lastDeviceId: state.selectedDeviceId,
+      clipboard: byId('clipboard-sync').checked,
+      autoReconnect: byId('input-auto-reconnect').checked,
+      edgeDelayMs: Number(byId('input-edge-delay').value) || 0,
+      layouts
+    };
+  }
+
+  async function persistInputOptions() {
+    if (!state.bootstrap || !state.inputLayout) return;
+    state.bootstrap.settings = await api.updateSettings({ inputSharing: readInputOptions() });
+  }
+
+  function snapInputLayout(layout, threshold) {
+    const remote = { ...layout };
+    let best = { distance: threshold, x: remote.x, y: remote.y };
+    for (const local of localDisplayRects()) {
+      const candidates = [
+        { distance: Math.abs(remote.x - (local.x + local.width)), x: local.x + local.width, y: remote.y },
+        { distance: Math.abs((remote.x + remote.width) - local.x), x: local.x - remote.width, y: remote.y },
+        { distance: Math.abs(remote.y - (local.y + local.height)), x: remote.x, y: local.y + local.height },
+        { distance: Math.abs((remote.y + remote.height) - local.y), x: remote.x, y: local.y - remote.height }
+      ];
+      for (const candidate of candidates) if (candidate.distance < best.distance) best = candidate;
+    }
+    return { ...remote, x: Math.round(best.x), y: Math.round(best.y) };
+  }
+
+  function renderInputLayout() {
+    const container = byId('layout-nodes');
+    const canvas = byId('input-layout-canvas');
+    if (!container || !canvas) return;
+    container.replaceChildren();
+    const layout = ensureInputLayout();
+    const locals = localDisplayRects();
+    const device = state.devices.find((item) => item.id === state.selectedDeviceId);
+    setText('input-device-name', device?.name || '请先选择 Windows 子端');
+    setText('input-device-resolution', layout ? `${layout.width} × ${layout.height}` : '—');
+    if (!locals.length) return;
+    const rectangles = layout ? [...locals, layout] : locals;
+    const left = Math.min(...rectangles.map((rect) => rect.x));
+    const top = Math.min(...rectangles.map((rect) => rect.y));
+    const right = Math.max(...rectangles.map((rect) => rect.x + rect.width));
+    const bottom = Math.max(...rectangles.map((rect) => rect.y + rect.height));
+    const canvasWidth = Math.max(320, canvas.clientWidth || 640);
+    const canvasHeight = Math.max(220, canvas.clientHeight || 330);
+    const padding = 24;
+    const scale = Math.min((canvasWidth - padding * 2) / Math.max(1, right - left), (canvasHeight - padding * 2) / Math.max(1, bottom - top));
+    const offsetX = (canvasWidth - (right - left) * scale) / 2 - left * scale;
+    const offsetY = (canvasHeight - (bottom - top) * scale) / 2 - top * scale;
+    const createNode = (rect, remote, index) => {
+      const node = document.createElement('div');
+      node.className = `layout-node${remote ? ' is-remote' : ''}${state.hostConnection ? ' is-disabled' : ''}`;
+      node.style.left = `${offsetX + rect.x * scale}px`;
+      node.style.top = `${offsetY + rect.y * scale}px`;
+      node.style.width = `${Math.max(58, rect.width * scale)}px`;
+      node.style.height = `${Math.max(40, rect.height * scale)}px`;
+      const copy = document.createElement('span');
+      const title = document.createElement('strong');
+      title.textContent = remote ? (device?.name || 'Windows') : `Mac · ${index + 1}`;
+      const dimensions = document.createElement('small');
+      dimensions.textContent = `${rect.width} × ${rect.height}`;
+      copy.append(title, dimensions);
+      node.append(copy);
+      if (remote) {
+        node.dataset.remote = 'true';
+        node.addEventListener('pointerdown', (event) => beginInputLayoutDrag(event, scale));
+      }
+      container.append(node);
+    };
+    locals.forEach((rect, index) => createNode(rect, false, index));
+    if (layout) createNode(layout, true, locals.length);
+  }
+
+  function beginInputLayoutDrag(event, scale) {
+    if (state.hostConnection || !state.inputLayout) return;
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Window-level listeners keep the drag alive. */ }
+    event.currentTarget.classList.add('is-dragging');
+    state.inputDrag = {
+      pointerId: event.pointerId,
+      node: event.currentTarget,
+      startX: event.clientX,
+      startY: event.clientY,
+      layout: { ...state.inputLayout },
+      scale
+    };
+  }
+
+  function moveInputLayoutDrag(event) {
+    const drag = state.inputDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const candidate = {
+      ...drag.layout,
+      x: drag.layout.x + (event.clientX - drag.startX) / drag.scale,
+      y: drag.layout.y + (event.clientY - drag.startY) / drag.scale
+    };
+    state.inputLayout = snapInputLayout(candidate, 85 / drag.scale);
+    renderInputLayout();
+    const replacement = byId('layout-nodes').querySelector('[data-remote="true"]');
+    replacement?.classList.add('is-dragging');
+    state.inputDrag.node = replacement;
+  }
+
+  function endInputLayoutDrag(event) {
+    if (!state.inputDrag || event.pointerId !== state.inputDrag.pointerId) return;
+    state.inputDrag.node?.classList.remove('is-dragging');
+    state.inputDrag = null;
+    persistInputOptions().catch((error) => toast('无法保存设备布局', errorText(error), 'error'));
   }
 
   function updateBitrateRange() {
@@ -433,7 +641,106 @@
     byId('capture-source').addEventListener('change', () => updateConnectAvailability());
     byId('connect-button').addEventListener('click', () => beginHostConnection(false));
     byId('disconnect-button').addEventListener('click', () => disconnectHost('由主端断开'));
-    byId('open-screen-permission').addEventListener('click', () => api.openScreenSettings());
+    byId('input-connect-button').addEventListener('click', () => beginHostConnection(false, 'input'));
+    byId('input-disconnect-button').addEventListener('click', () => disconnectHost('由主端停止键鼠共享'));
+    byId('reset-input-layout').addEventListener('click', () => {
+      ensureInputLayout(true);
+      renderInputLayout();
+      persistInputOptions().catch((error) => toast('无法保存设备布局', errorText(error), 'error'));
+    });
+    byId('input-edge-delay').addEventListener('input', () => {
+      setText('input-edge-delay-output', `${byId('input-edge-delay').value} ms`);
+    });
+    byId('input-edge-delay').addEventListener('change', () => persistInputOptions().catch(() => {}));
+    byId('clipboard-sync').addEventListener('change', () => persistInputOptions().catch(() => {}));
+    byId('input-auto-reconnect').addEventListener('change', () => persistInputOptions().catch(() => {}));
+    window.addEventListener('pointermove', moveInputLayoutDrag);
+    window.addEventListener('pointerup', endInputLayoutDrag);
+    window.addEventListener('pointercancel', endInputLayoutDrag);
+    window.addEventListener('resize', () => renderInputLayout());
+    byId('request-accessibility').addEventListener('click', async () => {
+      const granted = await api.requestAccessibility();
+      if (!granted) {
+        await api.openAccessibilitySettings();
+        toast('请开启辅助功能权限', '在列表中允许 LanExtend，然后返回并再次启动键鼠共享。', 'warning', 7200);
+      }
+      await refreshInputStatus();
+    });
+    byId('open-screen-permission').addEventListener('click', async () => {
+      await api.openScreenSettings();
+      window.setTimeout(() => refreshScreenPermission(), 800);
+    });
+  }
+
+  async function refreshInputStatus() {
+    if (state.role !== 'host') return state.inputStatus;
+    try {
+      const result = await api.getInputStatus();
+      state.inputAccessibility = Boolean(result?.accessibility);
+      state.inputStatus = { ...state.inputStatus, ...(result?.status || {}), supported: Boolean(result?.supported) };
+    } catch {
+      state.inputAccessibility = false;
+    }
+    renderInputStatus();
+    return state.inputStatus;
+  }
+
+  function renderInputStatus() {
+    const badge = byId('input-sharing-badge');
+    const live = byId('input-live-status');
+    const button = byId('input-connect-button');
+    if (!badge || !live || !button) return;
+    byId('accessibility-banner').hidden = state.inputAccessibility || !state.inputStatus.supported;
+    live.className = `input-live-status${state.inputStatus.active ? ' is-active' : state.inputStatus.running ? ' is-ready' : ''}`;
+    if (!state.inputStatus.supported) {
+      badge.textContent = '组件不可用';
+      badge.className = 'capability-badge is-error';
+      live.querySelector('strong').textContent = '键鼠助手不可用';
+      live.querySelector('small').textContent = '请重新构建或安装完整版本';
+    } else if (state.inputStatus.active) {
+      badge.textContent = '正在控制 Windows';
+      badge.className = 'capability-badge is-success';
+      live.querySelector('strong').textContent = '控制权在 Windows';
+      live.querySelector('small').textContent = '将鼠标移回相邻边缘即可返回 Mac';
+    } else if (state.inputStatus.running) {
+      badge.textContent = '共享运行中';
+      badge.className = 'capability-badge is-success';
+      live.querySelector('strong').textContent = '等待跨越屏幕边缘';
+      live.querySelector('small').textContent = '当前键盘和鼠标仍由 Mac 控制';
+    } else {
+      badge.textContent = state.inputAccessibility ? '可以启动' : '需要系统权限';
+      badge.className = 'capability-badge';
+      live.querySelector('strong').textContent = '尚未启动';
+      live.querySelector('small').textContent = '鼠标仍由 Mac 控制';
+    }
+    const hasDevice = Boolean(state.devices.find((item) => item.id === state.selectedDeviceId));
+    button.disabled = Boolean(state.hostConnection || !hasDevice || !state.inputStatus.supported);
+    button.textContent = hasDevice ? '启动键鼠共享' : '请先选择 Windows 子端';
+    renderInputLayout();
+  }
+
+  function renderScreenPermission(status) {
+    state.screenPermission = status || 'unknown';
+    const granted = state.screenPermission === 'granted';
+    const banner = byId('permission-banner');
+    if (banner) banner.hidden = granted;
+    setText(
+      'permission-message',
+      state.screenPermission === 'denied'
+        ? '系统当前未授权这个 LanExtend 副本，因此扩展屏不可用；键鼠共享不受影响。'
+        : '扩展屏功能需要此权限；键鼠共享不受影响。授权后返回此窗口会自动重新检测。'
+    );
+    updateConnectAvailability();
+    return granted;
+  }
+
+  async function refreshScreenPermission() {
+    if (state.role !== 'host') return false;
+    try {
+      return renderScreenPermission(await api.getScreenPermission());
+    } catch {
+      return renderScreenPermission('unknown');
+    }
   }
 
   function renderCaptureMode() {
@@ -524,11 +831,14 @@
       list.append(card);
     }
     updateConnectAvailability();
+    renderInputLayout();
+    renderInputStatus();
   }
 
   function selectDevice(id) {
     if (state.hostConnection) return;
     state.selectedDeviceId = id;
+    state.inputLayout = null;
     renderDevices();
     setConnectionSteps('display');
     const device = state.devices.find((item) => item.id === id);
@@ -536,6 +846,8 @@
       setText('connect-button-label', `扩展到 ${device.name}`);
       setText('connect-hint', `${formatAddress(device.host, device.port)} · 主端主动连接`);
     }
+    renderInputLayout();
+    renderInputStatus();
   }
 
   async function forgetDevice(id) {
@@ -637,7 +949,8 @@
     if (!button) return;
     const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'virtual';
     const sourceReady = mode === 'virtual' || Boolean(byId('capture-source').value);
-    button.disabled = Boolean(state.hostConnection || state.reconnectTimer || !state.selectedDeviceId || !sourceReady);
+    const permissionReady = state.role !== 'host' || state.screenPermission === 'granted';
+    button.disabled = Boolean(state.hostConnection || state.reconnectTimer || !state.selectedDeviceId || !sourceReady || !permissionReady);
     if (!state.selectedDeviceId) setText('connect-button-label', '选择设备后开始扩展');
     else if (!state.hostConnection) {
       const device = state.devices.find((item) => item.id === state.selectedDeviceId);
@@ -793,8 +1106,30 @@
     return transceiver.sender;
   }
 
-  async function beginHostConnection(isReconnect) {
+  async function beginHostConnection(isReconnect, requestedMode = 'display') {
     if (state.hostConnection) return;
+    const mode = requestedMode === 'input' ? 'input' : 'display';
+    if (mode === 'display' && !(await refreshScreenPermission())) {
+      toast('需要屏幕录制权限', '请在系统设置中授权当前安装在“应用程序”目录的 LanExtend，然后返回此窗口。', 'warning', 7200);
+      return;
+    }
+    if (mode === 'input') {
+      await refreshInputStatus();
+      if (!state.inputStatus.supported) {
+        toast('键鼠共享组件不可用', '请安装包含原生输入助手的完整版本。', 'error', 7200);
+        return;
+      }
+      if (!state.inputAccessibility) {
+        const granted = await api.requestAccessibility();
+        state.inputAccessibility = Boolean(granted);
+        renderInputStatus();
+        if (!granted) {
+          await api.openAccessibilitySettings();
+          toast('需要辅助功能权限', '开启 LanExtend 后返回此窗口，再次点击“启动键鼠共享”。', 'warning', 7200);
+          return;
+        }
+      }
+    }
     clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
     const device = state.devices.find((item) => item.id === state.selectedDeviceId);
@@ -804,10 +1139,11 @@
       return;
     }
 
-    const options = readHostOptions();
+    const options = mode === 'input' ? readInputOptions() : readHostOptions();
     const connection = {
       id: `${Date.now()}-${Math.random()}`,
       device: { ...device },
+      mode,
       options,
       stream: null,
       source: null,
@@ -828,12 +1164,17 @@
       lastPingRtt: null
     };
     state.hostConnection = connection;
-    renderHostConnecting(device, isReconnect ? `正在第 ${state.reconnectAttempt} 次重连` : '正在准备扩展屏');
+    state.reconnectMode = mode;
+    renderInputStatus();
+    if (mode === 'input') renderInputConnecting(device, isReconnect);
+    else renderHostConnecting(device, isReconnect ? `正在第 ${state.reconnectAttempt} 次重连` : '正在准备扩展屏');
 
     try {
       const target = await api.validateTarget(device.host, Number(device.port));
       if (!target?.valid) throw new Error('子端不是有效的私有局域网地址');
-      state.bootstrap.settings = await api.updateSettings({ host: options });
+      state.bootstrap.settings = await api.updateSettings(
+        mode === 'input' ? { inputSharing: options } : { host: options }
+      );
       await api.rememberDevice(device, false);
       if (state.hostConnection !== connection || connection.intentional) {
         cleanupHostConnection(connection);
@@ -846,8 +1187,8 @@
       cleanupHostConnection(connection);
       const message = errorText(error);
       renderHostIdle();
-      toast(isReconnect ? '自动重连未成功' : '无法开始扩展', message, 'error', 7200);
-      if (isReconnect && options.autoReconnect) scheduleReconnect(message);
+      toast(isReconnect ? '自动重连未成功' : mode === 'input' ? '无法启动键鼠共享' : '无法开始扩展', message, 'error', 7200);
+      if (isReconnect && options.autoReconnect) scheduleReconnect(message, mode);
       else if (connection.virtualOwned) api.destroyVirtualDisplay().catch(() => {});
     }
   }
@@ -879,20 +1220,25 @@
   }
 
   function openHostSocket(connection) {
-    setConnectionSteps('display');
-    setHostActivity('正在连接 Windows 子端', formatAddress(connection.device.host, connection.device.port));
+    if (connection.mode === 'display') setConnectionSteps('display');
+    if (connection.mode === 'display') setHostActivity('正在连接 Windows 子端', formatAddress(connection.device.host, connection.device.port));
+    else setInputActivity('正在连接 Windows 子端', formatAddress(connection.device.host, connection.device.port));
     const socket = new WebSocket(`ws://${connection.device.host}:${connection.device.port}`);
     connection.ws = socket;
     socket.addEventListener('open', () => {
       if (state.hostConnection !== connection) return;
-      setHostActivity('子端已响应', '正在协商扩展画面');
+      if (connection.mode === 'display') setHostActivity('子端已响应', '正在协商扩展画面');
+      else setInputActivity('子端已响应', '正在启动键鼠接收器');
       connection.welcomeTimer = window.setTimeout(() => handleHostLoss(connection, '子端握手超时'), 10_000);
     });
     socket.addEventListener('message', (event) => {
       handleHostSocketMessage(connection, event.data).catch((error) => handleHostLoss(connection, errorText(error)));
     });
     socket.addEventListener('error', () => {
-      if (state.hostConnection === connection && !connection.intentional) setHostActivity('无法连接子端', '请检查子端、防火墙与局域网');
+      if (state.hostConnection === connection && !connection.intentional) {
+        if (connection.mode === 'display') setHostActivity('无法连接子端', '请检查子端、防火墙与局域网');
+        else setInputActivity('无法连接子端', '请检查子端、防火墙与局域网');
+      }
     });
     socket.addEventListener('close', (event) => {
       if (state.hostConnection !== connection || connection.intentional) return;
@@ -917,10 +1263,52 @@
       startHostHeartbeat(connection);
       if (!connection.offered) {
         connection.offered = true;
-        await prepareHostMediaAndOffer(connection);
+        if (connection.mode === 'input') {
+          const layout = ensureInputLayout();
+          sendHostSignal(connection, makeSignal('control', {
+            action: 'share-start',
+            clipboard: connection.options.clipboard,
+            screen: { width: layout.width, height: layout.height }
+          }));
+          clearTimeout(connection.negotiationTimer);
+          connection.negotiationTimer = window.setTimeout(() => {
+            if (state.hostConnection === connection && !connection.connected) {
+              handleHostLoss(connection, 'Windows 键鼠接收器启动超时');
+            }
+          }, 15_000);
+        } else await prepareHostMediaAndOffer(connection);
       }
       return;
     }
+    if (message.type === 'control') {
+      if (message.action === 'share-ready' && connection.mode === 'input') {
+        const layout = ensureInputLayout();
+        if (message.screen) {
+          layout.width = message.screen.width;
+          layout.height = message.screen.height;
+        }
+        await persistInputOptions();
+        await api.startInputSharing({
+          locals: localDisplayRects(),
+          remote: { ...layout },
+          edgeDelayMs: connection.options.edgeDelayMs
+        }, connection.options.clipboard);
+        if (state.pendingClipboard) {
+          await api.applyRemoteClipboard(state.pendingClipboard);
+          state.pendingClipboard = null;
+        }
+        markInputConnected(connection);
+        return;
+      }
+      if (message.action === 'error') throw new Error(message.message || 'Windows 无法启动键鼠接收器');
+      return;
+    }
+    if (message.type === 'clipboard') {
+      const applied = await api.applyRemoteClipboard(message);
+      if (!applied) state.pendingClipboard = message;
+      return;
+    }
+    if (message.type === 'input') return;
     if (message.type === 'answer') {
       await connection.pc.setRemoteDescription(message.sdp);
       for (const candidate of connection.pendingIce.splice(0)) await connection.pc.addIceCandidate(candidate);
@@ -1009,11 +1397,20 @@
       id: String(receiver.id).slice(0, 128),
       name: String(receiver.name).slice(0, 64),
       port: Number(receiver.port) || connection.device.port,
+      capabilities: Array.isArray(receiver.capabilities) ? receiver.capabilities : connection.device.capabilities,
+      display: receiver.display || connection.device.display || null,
       online: true,
       lastSeen: Date.now()
     };
     connection.device = actual;
     connection.options.lastDeviceId = actual.id;
+    if (connection.mode === 'input' && state.inputLayout) {
+      state.inputLayout.deviceId = actual.id;
+      if (actual.display) {
+        state.inputLayout.width = actual.display.width;
+        state.inputLayout.height = actual.display.height;
+      }
+    }
     state.selectedDeviceId = actual.id;
     await api.rememberDevice(actual, true);
     state.bootstrap.settings.host.lastDeviceId = actual.id;
@@ -1067,6 +1464,20 @@
     toast('扩展屏已连接', `${connection.device.name} 正在显示 Mac 扩展画面`);
   }
 
+  function markInputConnected(connection) {
+    if (connection.connected || state.hostConnection !== connection) return;
+    connection.connected = true;
+    clearTimeout(connection.negotiationTimer);
+    state.reconnectAttempt = 0;
+    state.inputStatus = { ...state.inputStatus, running: true, active: false };
+    byId('input-connect-button').hidden = true;
+    byId('input-disconnect-button').hidden = false;
+    byId('reset-input-layout').disabled = true;
+    setSidebarStatus('online', '键鼠共享已启动', connection.device.name);
+    renderInputStatus();
+    toast('键鼠共享已启动', `将鼠标移向布局中与 ${connection.device.name} 相邻的边缘即可切换`);
+  }
+
   function startHostStats(connection) {
     clearInterval(connection.statsTimer);
     const update = async () => {
@@ -1108,6 +1519,21 @@
     setText('connect-hint', detail);
   }
 
+  function setInputActivity(title, detail) {
+    const live = byId('input-live-status');
+    if (live) {
+      live.className = 'input-live-status is-ready';
+      live.querySelector('strong').textContent = title;
+      live.querySelector('small').textContent = detail;
+    }
+    const badge = byId('input-sharing-badge');
+    if (badge) {
+      badge.textContent = '正在连接';
+      badge.className = 'capability-badge';
+    }
+    setSidebarStatus('busy', title, detail);
+  }
+
   function renderHostConnecting(device, detail) {
     byId('connect-button').disabled = true;
     byId('connect-button').hidden = true;
@@ -1117,6 +1543,26 @@
     setText('host-hero-title', `正在连接 ${device.name}`);
     setText('host-hero-description', '正在准备独立显示器、屏幕捕获与局域网点对点传输。');
     setText('stat-device', device.name);
+  }
+
+  function renderInputConnecting(device, isReconnect) {
+    byId('input-connect-button').hidden = true;
+    byId('input-disconnect-button').hidden = false;
+    byId('input-disconnect-button').textContent = '取消连接';
+    byId('reset-input-layout').disabled = true;
+    setInputActivity(
+      isReconnect ? `正在第 ${state.reconnectAttempt} 次重连` : `正在连接 ${device.name}`,
+      '正在准备键鼠与剪贴板通道'
+    );
+  }
+
+  function renderInputIdle() {
+    byId('input-connect-button').hidden = false;
+    byId('input-disconnect-button').hidden = true;
+    byId('input-disconnect-button').textContent = '停止键鼠共享';
+    byId('reset-input-layout').disabled = false;
+    state.inputStatus = { ...state.inputStatus, running: false, active: false };
+    renderInputStatus();
   }
 
   function renderHostIdle() {
@@ -1131,6 +1577,7 @@
     setSidebarStatus('online', '正在发现子端', '局域网服务运行中');
     setConnectionSteps(state.selectedDeviceId ? 'display' : 'device');
     updateConnectAvailability();
+    renderInputIdle();
   }
 
   function cleanupHostConnection(connection) {
@@ -1153,24 +1600,29 @@
       try { connection.pc.close(); } catch { /* Already closed. */ }
     }
     connection.stream?.getTracks().forEach((track) => track.stop());
+    if (connection.mode === 'input') {
+      state.pendingClipboard = null;
+      api.stopInputSharing().catch(() => {});
+    }
   }
 
   function handleHostLoss(connection, reason, reconnectAllowed = true) {
     if (state.hostConnection !== connection || connection.failed || connection.intentional) return;
     connection.failed = true;
-    const reconnect = reconnectAllowed
-      && connection.options.autoReconnect
-      && byId('auto-reconnect').checked;
+    const reconnectToggle = connection.mode === 'input' ? byId('input-auto-reconnect') : byId('auto-reconnect');
+    const reconnect = reconnectAllowed && connection.options.autoReconnect && reconnectToggle.checked;
     state.hostConnection = null;
     cleanupHostConnection(connection);
     renderHostIdle();
-    toast('扩展屏连接已中断', reason, reconnect ? 'warning' : 'error', 6000);
-    if (reconnect) scheduleReconnect(reason);
+    toast(connection.mode === 'input' ? '键鼠共享已中断' : '扩展屏连接已中断', reason, reconnect ? 'warning' : 'error', 6000);
+    if (reconnect) scheduleReconnect(reason, connection.mode);
     else if (connection.virtualOwned) api.destroyVirtualDisplay().catch(() => {});
   }
 
-  function scheduleReconnect(reason) {
-    if (state.reconnectTimer || state.hostConnection || !byId('auto-reconnect').checked) return;
+  function scheduleReconnect(reason, mode = state.reconnectMode) {
+    const reconnectToggle = mode === 'input' ? byId('input-auto-reconnect') : byId('auto-reconnect');
+    if (state.reconnectTimer || state.hostConnection || !reconnectToggle.checked) return;
+    state.reconnectMode = mode;
     state.reconnectAttempt += 1;
     const delay = Math.min(12_000, 1600 * (2 ** Math.min(state.reconnectAttempt - 1, 3)));
     let seconds = Math.ceil(delay / 1000);
@@ -1178,6 +1630,13 @@
     byId('connect-button').hidden = true;
     byId('disconnect-button').hidden = false;
     setText('disconnect-button', '取消自动重连');
+    if (mode === 'input') {
+      byId('connect-button').hidden = false;
+      byId('disconnect-button').hidden = true;
+      byId('input-connect-button').hidden = true;
+      byId('input-disconnect-button').hidden = false;
+      setText('input-disconnect-button', '取消自动重连');
+    }
     clearInterval(state.reconnectCountdownTimer);
     state.reconnectCountdownTimer = window.setInterval(() => {
       seconds -= 1;
@@ -1187,7 +1646,7 @@
       window.clearInterval(state.reconnectCountdownTimer);
       state.reconnectCountdownTimer = null;
       state.reconnectTimer = null;
-      beginHostConnection(true);
+      beginHostConnection(true, mode);
     }, delay);
   }
 
@@ -1199,6 +1658,7 @@
     state.reconnectCountdownTimer = null;
     state.reconnectAttempt = 0;
     const connection = state.hostConnection;
+    const mode = connection?.mode || state.reconnectMode;
     state.hostConnection = null;
     if (connection) {
       connection.intentional = true;
@@ -1207,10 +1667,14 @@
       }
       cleanupHostConnection(connection);
     }
-    if (state.virtualDisplayRunning || connection?.virtualOwned) api.destroyVirtualDisplay().catch(() => {});
+    if (mode === 'input') api.stopInputSharing().catch(() => {});
+    if (mode === 'display' && (state.virtualDisplayRunning || connection?.virtualOwned)) api.destroyVirtualDisplay().catch(() => {});
     renderHostIdle();
     refreshDevices();
-    toast(wasReconnecting || !connection?.connected ? '连接已取消' : '扩展屏已断开', wasReconnecting ? '已停止自动重连' : '子端已恢复等待状态');
+    toast(
+      wasReconnecting || !connection?.connected ? '连接已取消' : mode === 'input' ? '键鼠共享已停止' : '扩展屏已断开',
+      wasReconnecting ? '已停止自动重连' : '子端已恢复等待状态'
+    );
   }
 
   function applyReceiverSettings(settings) {
@@ -1283,6 +1747,35 @@
         badge.className = 'capability-badge is-success';
       }
     }
+  }
+
+  function renderReceiverInputStatus(status = {}) {
+    state.receiverInputStatus = { ...state.receiverInputStatus, ...status };
+    const current = state.receiverInputStatus;
+    const badge = byId('receiver-input-badge');
+    if (!badge) return;
+    if (current.active) {
+      badge.textContent = '正在控制';
+      badge.className = 'capability-badge is-success';
+      setText('receiver-input-state', 'Mac 正在控制此设备');
+      setSidebarStatus('online', '键鼠控制中', state.receiverHost?.name || 'Mac 主端');
+      setText('receiver-state-kicker', '键鼠共享');
+      setText('receiver-state-title', '当前由 Mac 键盘和鼠标控制');
+      setText('receiver-state-description', '鼠标移回相邻屏幕边缘后，控制权会自动返回 Mac。');
+    } else if (current.running) {
+      badge.textContent = '共享已就绪';
+      badge.className = 'capability-badge is-success';
+      setText('receiver-input-state', '等待鼠标进入');
+      setSidebarStatus('online', '键鼠共享已就绪', state.receiverHost?.name || 'Mac 主端');
+      setText('receiver-state-kicker', '键鼠共享已就绪');
+      setText('receiver-state-title', '等待 Mac 鼠标跨越屏幕边缘');
+      setText('receiver-state-description', '当前不传输画面；两台设备继续显示各自的本地内容。');
+    } else {
+      badge.textContent = status.error ? '启动失败' : '待机';
+      badge.className = status.error ? 'capability-badge is-error' : 'capability-badge';
+      setText('receiver-input-state', status.error || '等待 Mac');
+    }
+    setText('receiver-clipboard-state', current.clipboard ? '双向同步中' : '未启动');
   }
 
   async function saveReceiverSettings(event) {
@@ -1364,7 +1857,6 @@
       state.receiverHost = { ...state.receiverHost, name: String(message.name || 'Mac 主端').slice(0, 64) };
       setText('remote-host-name', state.receiverHost.name);
       setText('receiver-host-summary', state.receiverHost.name);
-      ensureReceiverPeer();
       return;
     }
     if (message.type === 'offer') {
@@ -1515,6 +2007,7 @@
     if (state.receiverSession && event?.sessionId && state.receiverSession.id !== event.sessionId) return;
     const reason = event?.reason || (event?.code === 1000 ? '主端已正常断开' : '主端连接已结束');
     cleanupReceiverPeer(true);
+    renderReceiverInputStatus({ running: false, active: false, clipboard: false });
     if (state.receiverFullscreen) setReceiverFullscreen(false);
     renderReceiverIdle(reason);
   }
@@ -1530,6 +2023,7 @@
     setText('receiver-bitrate', '— Mbps');
     setText('receiver-latency', '— ms');
     state.receiverHost = null;
+    renderReceiverInputStatus({ running: false, active: false, clipboard: false });
     renderListeningStatus();
   }
 
@@ -1543,8 +2037,14 @@
     state.role = bootstrap.role;
     state.devices = Array.isArray(bootstrap.devices) ? bootstrap.devices : [];
     state.virtualDisplayRunning = Boolean(bootstrap.virtualDisplay?.running);
+    state.inputAccessibility = Boolean(bootstrap.inputSharing?.accessibility);
+    state.inputStatus = {
+      ...state.inputStatus,
+      ...(bootstrap.inputSharing?.status || {}),
+      supported: Boolean(bootstrap.inputSharing?.supported)
+    };
     setRoleVisibility(state.role);
-    setText('app-version', `局域网扩展屏 · ${bootstrap.appVersion || '0.2.0'}`);
+    setText('app-version', `扩展屏与键鼠共享 · ${bootstrap.appVersion || '0.3.0'}`);
     setText('protocol-chip', `协议 v${bootstrap.protocolVersion}`);
     bindUpdateUi();
 
@@ -1558,21 +2058,35 @@
         const fallbackMode = document.querySelector('input[name="captureMode"][value="existing"]');
         if (fallbackMode) fallbackMode.checked = true;
       }
-      const permissionGranted = bootstrap.permission === 'granted';
-      byId('permission-banner').hidden = permissionGranted;
+      renderScreenPermission(bootstrap.permission);
       renderDevices();
       renderCaptureMode();
       renderHostIdle();
+      renderInputLayout();
+      renderInputStatus();
     } else {
       bindReceiverUi();
       applyReceiverSettings(bootstrap.settings);
       renderReceiverIdle();
+      renderReceiverInputStatus();
     }
 
     await api.rendererReady();
 
     if (state.role === 'host') {
+      api.onScreenPermissionChanged((status) => renderScreenPermission(status));
+      window.addEventListener('focus', () => {
+        refreshScreenPermission();
+        refreshInputStatus();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          refreshScreenPermission();
+          refreshInputStatus();
+        }
+      });
       await refreshSources(false);
+      await refreshInputStatus();
     } else {
       if (state.earlyReceiverConnection) {
         onReceiverConnected(state.earlyReceiverConnection);

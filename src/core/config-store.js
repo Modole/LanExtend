@@ -53,6 +53,49 @@ function sanitizeReceiver(input = {}, previous = DEFAULTS.receiver) {
   };
 }
 
+function sanitizeDisplay(input) {
+  if (!input || typeof input !== 'object') return null;
+  const width = clampInteger(input.width, 320, 7680, 1920);
+  const height = clampInteger(input.height, 240, 4320, 1080);
+  const scaleFactor = Number(input.scaleFactor);
+  return {
+    width,
+    height,
+    scaleFactor: Number.isFinite(scaleFactor) && scaleFactor >= 0.5 && scaleFactor <= 4
+      ? scaleFactor
+      : 1
+  };
+}
+
+function sanitizeInputLayout(input) {
+  if (!input || typeof input !== 'object' || typeof input.deviceId !== 'string') return null;
+  return {
+    deviceId: input.deviceId.slice(0, 128),
+    x: clampInteger(input.x, -32_768, 32_768, 1920),
+    y: clampInteger(input.y, -32_768, 32_768, 0),
+    width: clampInteger(input.width, 320, 7680, 1920),
+    height: clampInteger(input.height, 240, 4320, 1080)
+  };
+}
+
+function sanitizeInputSharing(input = {}, previous = DEFAULTS.inputSharing) {
+  const priorLayouts = Array.isArray(previous.layouts) ? previous.layouts : [];
+  const layouts = Array.isArray(input.layouts)
+    ? input.layouts.map(sanitizeInputLayout).filter(Boolean).slice(0, 32)
+    : priorLayouts;
+  return {
+    lastDeviceId: typeof input.lastDeviceId === 'string'
+      ? input.lastDeviceId.slice(0, 128)
+      : input.lastDeviceId === null ? null : previous.lastDeviceId,
+    clipboard: typeof input.clipboard === 'boolean' ? input.clipboard : previous.clipboard,
+    autoReconnect: typeof input.autoReconnect === 'boolean'
+      ? input.autoReconnect
+      : previous.autoReconnect,
+    edgeDelayMs: clampInteger(input.edgeDelayMs, 0, 1000, previous.edgeDelayMs),
+    layouts
+  };
+}
+
 function sanitizeDevice(input) {
   if (!input || typeof input !== 'object') return null;
   const host = typeof input.host === 'string' ? input.host : '';
@@ -63,7 +106,8 @@ function sanitizeDevice(input) {
     host,
     port: input.port,
     lastSeen: Number.isFinite(input.lastSeen) ? input.lastSeen : Date.now(),
-    lastConnected: Number.isFinite(input.lastConnected) ? input.lastConnected : null
+    lastConnected: Number.isFinite(input.lastConnected) ? input.lastConnected : null,
+    display: sanitizeDisplay(input.display)
   };
 }
 
@@ -86,6 +130,7 @@ class ConfigStore {
         schemaVersion: 1,
         host: sanitizeHost(parsed.host, fallback.host),
         receiver: sanitizeReceiver(parsed.receiver, fallback.receiver),
+        inputSharing: sanitizeInputSharing(parsed.inputSharing, fallback.inputSharing),
         rememberedDevices: Array.isArray(parsed.rememberedDevices)
           ? parsed.rememberedDevices.map(sanitizeDevice).filter(Boolean).slice(0, 32)
           : []
@@ -103,6 +148,9 @@ class ConfigStore {
 
   updateSettings(patch = {}) {
     if (patch.host) this.state.host = sanitizeHost(patch.host, this.state.host);
+    if (patch.inputSharing) {
+      this.state.inputSharing = sanitizeInputSharing(patch.inputSharing, this.state.inputSharing);
+    }
     if (patch.receiver) {
       const next = sanitizeReceiver(patch.receiver, this.state.receiver);
       next.id = this.state.receiver.id;
@@ -154,6 +202,9 @@ module.exports = {
   ConfigStore,
   defaultState,
   sanitizeDevice,
+  sanitizeDisplay,
   sanitizeHost,
+  sanitizeInputLayout,
+  sanitizeInputSharing,
   sanitizeReceiver
 };

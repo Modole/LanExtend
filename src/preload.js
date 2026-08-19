@@ -31,9 +31,18 @@ contextBridge.exposeInMainWorld('lanextend', Object.freeze({
   disconnectReceiver: (sessionId, reason) => ipcRenderer.invoke(
     'receiver:disconnect', sessionId, reason
   ),
+  startInputSharing: (layout, clipboardEnabled) => ipcRenderer.invoke(
+    'input:host-start', layout, clipboardEnabled
+  ),
+  stopInputSharing: () => ipcRenderer.invoke('input:host-stop'),
+  getInputStatus: () => ipcRenderer.invoke('input:get-status'),
+  applyRemoteClipboard: (message) => ipcRenderer.invoke('input:apply-clipboard', message),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
   setFullscreen: (enabled) => ipcRenderer.invoke('window:set-fullscreen', enabled),
+  getScreenPermission: () => ipcRenderer.invoke('permission:get-screen-status'),
   openScreenSettings: () => ipcRenderer.invoke('permission:open-screen-settings'),
+  requestAccessibility: () => ipcRenderer.invoke('permission:request-accessibility'),
+  openAccessibilitySettings: () => ipcRenderer.invoke('permission:open-accessibility-settings'),
   validateTarget: (host, port) => ipcRenderer.invoke('network:validate-target', host, port),
   onDevicesChanged: (callback) => subscribe('devices:changed', callback),
   onDisplayChanged: (callback) => subscribe('display:changed', callback),
@@ -41,5 +50,10 @@ contextBridge.exposeInMainWorld('lanextend', Object.freeze({
   onReceiverDisconnected: (callback) => subscribe('receiver:disconnected', callback),
   onReceiverSignal: (callback) => subscribe('receiver:signal', callback),
   onReceiverListening: (callback) => subscribe('receiver:listening', callback),
+  onScreenPermissionChanged: (callback) => subscribe('permission:screen-changed', callback),
+  onInputOutbound: (callback) => subscribe('input:outbound', callback),
+  onInputHostStatus: (callback) => subscribe('input:host-status', callback),
+  onInputReceiverStatus: (callback) => subscribe('input:receiver-status', callback),
+  onInputWarning: (callback) => subscribe('input:warning', callback),
   onServiceError: (callback) => subscribe('service:error', callback)
 }));

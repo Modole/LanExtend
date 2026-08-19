@@ -12,8 +12,24 @@ const SIGNAL_TYPES = new Set([
   'ice',
   'disconnect',
   'ping',
-  'pong'
+  'pong',
+  'control',
+  'input',
+  'clipboard'
 ]);
+
+const CONTROL_ACTIONS = new Set([
+  'share-start',
+  'share-ready',
+  'share-stop',
+  'active',
+  'inactive',
+  'error'
+]);
+
+const INPUT_KINDS = new Set(['pointer', 'button', 'wheel', 'key', 'releaseAll']);
+const MOUSE_BUTTONS = new Set(['left', 'right', 'middle', 'other']);
+const MAX_CLIPBOARD_BYTES = 128 * 1024;
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -97,6 +113,57 @@ function parseSignalMessage(raw) {
     throw new Error('断开原因无效');
   }
 
+  if (message.type === 'control') {
+    if (!CONTROL_ACTIONS.has(message.action)) throw new Error('控制消息无效');
+    if (message.clipboard !== undefined && typeof message.clipboard !== 'boolean') {
+      throw new Error('控制消息的剪贴板设置无效');
+    }
+    if (message.screen !== undefined) {
+      if (!isPlainObject(message.screen)
+        || !Number.isInteger(message.screen.width)
+        || !Number.isInteger(message.screen.height)
+        || message.screen.width < 320 || message.screen.width > 7680
+        || message.screen.height < 240 || message.screen.height > 4320) {
+        throw new Error('控制消息的屏幕信息无效');
+      }
+    }
+    if (message.message !== undefined && !isNonEmptyString(message.message, 512)) {
+      throw new Error('控制消息的说明无效');
+    }
+  }
+
+  if (message.type === 'input') {
+    const event = message.event;
+    if (!isPlainObject(event) || !INPUT_KINDS.has(event.kind)) throw new Error('输入事件无效');
+    if (event.kind === 'pointer'
+      && (!Number.isInteger(event.x) || !Number.isInteger(event.y)
+        || event.x < -32_768 || event.x > 32_768 || event.y < -32_768 || event.y > 32_768)) {
+      throw new Error('鼠标坐标无效');
+    }
+    if (event.kind === 'button'
+      && (!MOUSE_BUTTONS.has(event.button) || typeof event.down !== 'boolean')) {
+      throw new Error('鼠标按键事件无效');
+    }
+    if (event.kind === 'wheel'
+      && (!Number.isFinite(event.deltaX) || !Number.isFinite(event.deltaY)
+        || Math.abs(event.deltaX) > 1000 || Math.abs(event.deltaY) > 1000)) {
+      throw new Error('滚轮事件无效');
+    }
+    if (event.kind === 'key'
+      && (!Number.isInteger(event.vk) || event.vk < 0 || event.vk > 255
+        || typeof event.down !== 'boolean')) {
+      throw new Error('键盘事件无效');
+    }
+  }
+
+  if (message.type === 'clipboard') {
+    if (typeof message.text !== 'string'
+      || Buffer.byteLength(message.text, 'utf8') > MAX_CLIPBOARD_BYTES
+      || !isNonEmptyString(message.revision, 160)) {
+      throw new Error('剪贴板消息无效');
+    }
+  }
+
   return message;
 }
 
@@ -127,7 +194,8 @@ function makeBeacon(receiver) {
     port: receiver.port,
     platform: 'win32',
     authMode: 'none',
-    capabilities: ['video', 'fullscreen']
+    capabilities: ['video', 'fullscreen', 'input', 'clipboard'],
+    display: receiver.display
   };
 }
 
@@ -154,12 +222,24 @@ function parseBeacon(raw, remoteAddress) {
       ? beacon.capabilities.filter((item) => typeof item === 'string').slice(0, 8)
       : [],
     authMode: 'none',
+    display: isPlainObject(beacon.display)
+      && Number.isInteger(beacon.display.width)
+      && Number.isInteger(beacon.display.height)
+      ? {
+          width: Math.max(320, Math.min(7680, beacon.display.width)),
+          height: Math.max(240, Math.min(4320, beacon.display.height)),
+          scaleFactor: Number.isFinite(beacon.display.scaleFactor) ? beacon.display.scaleFactor : 1
+        }
+      : null,
     online: true,
     discoveredAt: Date.now()
   };
 }
 
 module.exports = {
+  CONTROL_ACTIONS,
+  INPUT_KINDS,
+  MAX_CLIPBOARD_BYTES,
   MAX_DISCONNECT_REASON_BYTES,
   isPlainObject,
   isPrivateIPv4,

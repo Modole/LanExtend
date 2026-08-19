@@ -47,6 +47,24 @@ test('partial setting update preserves connection memory', (t) => {
   assert.equal(store.get().host.bitrateMbps, 20);
 });
 
+test('input sharing layout and clipboard settings are durable', (t) => {
+  const directory = temporaryDirectory(t);
+  const store = new ConfigStore(directory);
+  store.updateSettings({ inputSharing: {
+    lastDeviceId: 'win-input',
+    clipboard: true,
+    edgeDelayMs: 160,
+    layouts: [{ deviceId: 'win-input', x: 2560, y: 0, width: 1920, height: 1080 }]
+  } });
+  const reloaded = new ConfigStore(directory).get().inputSharing;
+  assert.equal(reloaded.lastDeviceId, 'win-input');
+  assert.equal(reloaded.clipboard, true);
+  assert.equal(reloaded.edgeDelayMs, 160);
+  assert.deepEqual(reloaded.layouts[0], {
+    deviceId: 'win-input', x: 2560, y: 0, width: 1920, height: 1080
+  });
+});
+
 test('remembering, reconnecting and forgetting a device is durable', (t) => {
   const directory = temporaryDirectory(t);
   const store = new ConfigStore(directory);

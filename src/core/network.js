@@ -230,7 +230,9 @@ class SignalServer extends EventEmitter {
         id: this.receiver.id,
         name: this.receiver.name,
         port: this.port,
-        authMode: 'none'
+        authMode: 'none',
+        capabilities: this.receiver.capabilities || ['video', 'fullscreen', 'input', 'clipboard'],
+        display: this.receiver.display || null
       },
       transportSecurity: 'none'
     }));

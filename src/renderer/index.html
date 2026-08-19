@@ -52,6 +52,10 @@
             <span class="nav-icon icon-sliders" aria-hidden="true"></span>
             画面设置
           </button>
+          <button class="nav-item" type="button" data-scroll-to="input-sharing-panel">
+            <span class="nav-icon icon-pointer" aria-hidden="true"></span>
+            键鼠共享
+          </button>
         </nav>
 
         <nav id="receiver-nav" class="side-nav role-only receiver-only" aria-label="子端导航">
@@ -62,6 +66,10 @@
           <button class="nav-item" type="button" data-scroll-to="receiver-settings">
             <span class="nav-icon icon-sliders" aria-hidden="true"></span>
             子端设置
+          </button>
+          <button class="nav-item" type="button" data-scroll-to="receiver-input-status">
+            <span class="nav-icon icon-pointer" aria-hidden="true"></span>
+            键鼠状态
           </button>
         </nav>
 
@@ -97,7 +105,7 @@
             <h1 id="page-title">扩展工作台</h1>
           </div>
           <div class="topbar-actions">
-            <span id="protocol-chip" class="soft-chip">协议 v1</span>
+            <span id="protocol-chip" class="soft-chip">协议 v2</span>
             <button id="refresh-devices" class="icon-button role-only host-only" type="button" title="刷新设备列表" aria-label="刷新设备列表">
               <span class="refresh-glyph" aria-hidden="true"></span>
             </button>
@@ -112,7 +120,7 @@
             <span class="notice-symbol">!</span>
             <div>
               <strong>需要屏幕录制权限</strong>
-              <p>macOS 需要授权 LanExtend 捕获扩展屏。授权后请重新启动应用。</p>
+              <p id="permission-message">扩展屏功能需要此权限；键鼠共享不受影响。授权后返回此窗口会自动重新检测。</p>
             </div>
             <button id="open-screen-permission" class="button button-small button-secondary" type="button">打开系统设置</button>
           </div>
@@ -265,6 +273,88 @@
               <p id="connect-hint" class="connect-hint">子端无需确认，主端拥有最高连接权限。</p>
             </section>
           </div>
+
+          <section id="input-sharing-panel" class="panel input-sharing-panel">
+            <div class="panel-header">
+              <div>
+                <span class="section-kicker">无缝跨设备控制</span>
+                <h2>键鼠与剪贴板共享</h2>
+              </div>
+              <span id="input-sharing-badge" class="capability-badge">等待配置</span>
+            </div>
+
+            <div id="accessibility-banner" class="inline-permission" hidden>
+              <div>
+                <strong>需要辅助功能权限</strong>
+                <span>macOS 要求此权限才能在屏幕边缘接管全局键盘和鼠标。</span>
+              </div>
+              <button id="request-accessibility" class="button button-small button-secondary" type="button">开启权限</button>
+            </div>
+
+            <div class="input-sharing-grid">
+              <div class="layout-editor-wrap">
+                <div class="layout-editor-head">
+                  <div>
+                    <strong>设备布局</strong>
+                    <span>拖动橙色 Windows 屏幕，让它贴到任意 Mac 屏幕边缘</span>
+                  </div>
+                  <button id="reset-input-layout" class="button button-small button-quiet" type="button">自动排列</button>
+                </div>
+                <div id="input-layout-canvas" class="layout-canvas" aria-label="键鼠共享设备布局">
+                  <div class="layout-grid-lines" aria-hidden="true"></div>
+                  <div id="layout-nodes" class="layout-nodes"></div>
+                </div>
+                <div class="layout-legend">
+                  <span><i class="is-mac"></i>本机 Mac 显示器</span>
+                  <span><i class="is-windows"></i>Windows 设备</span>
+                  <span>⌃⌥⌘Esc 可立即返回 Mac</span>
+                </div>
+              </div>
+
+              <div class="input-sharing-controls">
+                <div class="input-device-summary">
+                  <span class="input-device-icon">W</span>
+                  <div>
+                    <small>目标设备</small>
+                    <strong id="input-device-name">请先选择 Windows 子端</strong>
+                    <span id="input-device-resolution">—</span>
+                  </div>
+                </div>
+
+                <div class="switch-list">
+                  <label class="switch-row" for="clipboard-sync">
+                    <span><strong>双向剪贴板同步</strong><small>自动同步两台设备的纯文本剪贴板</small></span>
+                    <input id="clipboard-sync" class="switch-input" type="checkbox" checked><i></i>
+                  </label>
+                  <label class="switch-row" for="input-auto-reconnect">
+                    <span><strong>断线自动恢复</strong><small>继续使用上次设备和屏幕布局</small></span>
+                    <input id="input-auto-reconnect" class="switch-input" type="checkbox" checked><i></i>
+                  </label>
+                </div>
+
+                <div class="field-group edge-delay-field">
+                  <div class="label-line">
+                    <label for="input-edge-delay">边缘停留</label>
+                    <output id="input-edge-delay-output" for="input-edge-delay">80 ms</output>
+                  </div>
+                  <input id="input-edge-delay" type="range" min="0" max="500" step="20" value="80">
+                  <p class="field-help">数值越低切换越快；提高它可以减少误触屏幕边缘。</p>
+                </div>
+
+                <div id="input-live-status" class="input-live-status">
+                  <span class="status-light"></span>
+                  <div><strong>尚未启动</strong><small>鼠标仍由 Mac 控制</small></div>
+                </div>
+
+                <button id="input-connect-button" class="button button-primary button-connect" type="button" disabled>
+                  启动键鼠共享
+                </button>
+                <button id="input-disconnect-button" class="button button-danger button-connect" type="button" hidden>
+                  停止键鼠共享
+                </button>
+              </div>
+            </div>
+          </section>
         </section>
 
         <section id="receiver-root" class="role-panel receiver-only" hidden>
@@ -342,6 +432,26 @@
                 </label>
                 <button id="save-receiver-settings" class="button button-secondary button-wide" type="submit">保存子端设置</button>
               </form>
+            </section>
+
+            <section id="receiver-input-status" class="panel receiver-status-panel">
+              <div class="panel-header">
+                <div>
+                  <span class="section-kicker">跨设备控制</span>
+                  <h2>键鼠与剪贴板</h2>
+                </div>
+                <span id="receiver-input-badge" class="capability-badge">待机</span>
+              </div>
+              <div class="receiver-input-visual">
+                <span class="input-device-icon">M</span>
+                <span class="input-link-line"><i></i></span>
+                <span class="input-device-icon is-windows">W</span>
+              </div>
+              <div class="status-detail-list">
+                <div><span>键鼠控制</span><strong id="receiver-input-state">等待 Mac</strong></div>
+                <div><span>剪贴板同步</span><strong id="receiver-clipboard-state">未启动</strong></div>
+                <div><span>切换方式</span><strong>移动到屏幕边缘</strong></div>
+              </div>
             </section>
           </div>
         </section>
