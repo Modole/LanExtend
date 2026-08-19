@@ -4,6 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUTPUT_DIR="$SCRIPT_DIR/.build"
 OUTPUT_PATH="$OUTPUT_DIR/lanextend-vdisplay"
+INPUT_OUTPUT_PATH="$OUTPUT_DIR/lanextend-input"
 SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
 CLANG_PATH=$(xcrun --sdk macosx --find clang)
 
@@ -29,3 +30,25 @@ mkdir -p "$OUTPUT_DIR"
   -o "$OUTPUT_PATH"
 
 printf '%s\n' "Built $OUTPUT_PATH"
+
+"$CLANG_PATH" \
+  -x objective-c \
+  -std=gnu17 \
+  -fobjc-arc \
+  -fblocks \
+  -O2 \
+  -arch arm64 \
+  -arch x86_64 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -mmacosx-version-min=14.0 \
+  -isysroot "$SDK_PATH" \
+  -framework AppKit \
+  -framework ApplicationServices \
+  -framework Foundation \
+  -framework CoreGraphics \
+  "$SCRIPT_DIR/lanextend_input.m" \
+  -o "$INPUT_OUTPUT_PATH"
+
+printf '%s\n' "Built $INPUT_OUTPUT_PATH"

@@ -34,7 +34,8 @@ LanExtend/
 │   ├── preload.js              白名单 IPC 桥
 │   ├── core/                   配置、网络、协议和 helper 管理
 │   └── renderer/               两端 GUI 与 WebRTC
-├── native/macos/               CGVirtualDisplay helper 和说明
+├── native/macos/               CGVirtualDisplay 与键鼠捕获 helper
+├── native/windows/             Windows 键鼠注入 PowerShell helper
 ├── scripts/                    原生构建、源码检查
 ├── tests/                      Node 单元测试
 ├── docs/                       中文交付文档
@@ -50,7 +51,7 @@ LanExtend/
 | `npm start` | 两端 | 启动 Electron；macOS 默认主端，Windows 默认子端 |
 | `npm run dev:host` | macOS | 强制主端并允许多实例；使用临时开发 userData |
 | `npm run dev:receiver` | Windows | 强制子端并允许多实例；使用临时开发 userData |
-| `npm run build:native` | macOS | 构建虚拟显示 helper；其他平台明确跳过 |
+| `npm run build:native` | macOS | 构建虚拟显示和键鼠捕获 helper；其他平台明确跳过 |
 | `npm test` | 两端 | 先做 JS/MJS 语法检查，再运行 Node 测试 |
 | `npm run verify` | 两端 | 构建/跳过 helper 后运行测试 |
 | `npm run dist:mac` | macOS | 构建 universal2 helper，再生成 Universal DMG 和 ZIP |
@@ -68,6 +69,7 @@ LanExtend/
 npm ci
 npm run build:native
 native/macos/.build/lanextend-vdisplay --probe
+native/macos/.build/lanextend-input --probe
 npm run dev:host
 ```
 
@@ -129,6 +131,7 @@ npm test
 - 私有 IPv4、端口、发现报文和信令消息解析；
 - IPv4 广播地址计算和 WebSocket 单会话行为；
 - 虚拟显示参数验证、helper 路径与生命周期管理的可测试部分；
+- 二维布局边缘进入/退出、Mac→Windows 键码和剪贴板去重；
 - JS/MJS 源码语法。
 
 当前自动化**没有**覆盖：
@@ -149,13 +152,13 @@ npm test
 npm run dist:mac
 ```
 
-`dist:mac` 会先用 `-arch arm64 -arch x86_64` 把 universal2 helper 编译到 `native/macos/.build/lanextend-vdisplay`，再调用 electron-builder `--universal` 合并两种 Electron 架构并生成 Universal DMG/ZIP。
+`dist:mac` 会先用 `-arch arm64 -arch x86_64` 构建 `lanextend-vdisplay` 与 `lanextend-input` 两个 universal2 helper，再调用 electron-builder `--universal` 合并两种 Electron 架构并生成 Universal DMG/ZIP。
 
 注意：
 
 - 本地/CI 默认产物不具备正式 Developer ID 签名和 Apple 公证；
 - 当前项目使用私有 `CGVirtualDisplay` API，不支持 Mac App Store；
-- 构建后用 `lipo -info native/macos/.build/lanextend-vdisplay` 并检查最终 app 主二进制，确认都含 `x86_64` 与 `arm64`；命令配置为 Universal 不等于产物已经正确合并。
+- 构建后对 `.build/lanextend-vdisplay` 和 `.build/lanextend-input` 分别执行 `lipo -info`，并检查最终 app 主二进制，确认都含 `x86_64` 与 `arm64`。
 - 即使同一个 Universal 包包含两种 slices，也必须分别在 Intel 和 Apple Silicon 真机验收私有 API、权限、捕获和 WebRTC；当前没有自动真机矩阵可替代。
 - 构建时设置 `CSC_IDENTITY_AUTO_DISCOVERY=false` 可避免 CI 意外使用 runner 上的签名身份；正式发布则应使用受保护 secrets 和独立签名工作流。
 

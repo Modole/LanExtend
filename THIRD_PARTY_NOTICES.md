@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This file describes direct runtime/build dependencies and implementation references for LanExtend 0.2.0. The authoritative resolved dependency graph is `package-lock.json`. A release maintainer must re-run license review whenever the lockfile or packaging inputs change.
+This file describes direct runtime/build dependencies and implementation references for LanExtend 0.2.1. The authoritative resolved dependency graph is `package-lock.json`. A release maintainer must re-run license review whenever the lockfile or packaging inputs change.
 
 LanExtend source code is licensed under the repository's MIT License. Third-party components remain under their respective licenses.
 

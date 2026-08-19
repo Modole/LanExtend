@@ -1,6 +1,6 @@
 # LanExtend
 
-LanExtend 是一个面向可信局域网的双端扩展屏 MVP：macOS 主端创建一块虚拟显示器，捕获该显示器后通过 WebRTC 将视频发送到 Windows 子端 GUI。主端发起连接并拥有会话控制权；子端负责被发现、接收信令和全屏显示。
+LanExtend 是一个面向局域网的 Mac/Windows 双端协作工具，包含两种独立模式：把 Windows 变成 Mac 无线扩展屏，或在不传输画面的情况下，让一套 Mac 键盘鼠标无缝控制两台设备并双向同步剪贴板。
 
 > 当前定位是可继续开发和双机验收的工程交付，不是已签名的正式产品。仓库内的自动化测试不等于真实 Mac/Windows、不同网卡、GPU 解码或长时间运行验证。
 
@@ -13,8 +13,9 @@ LanExtend 是一个面向可信局域网的双端扩展屏 MVP：macOS 主端创
 | 拓扑 | 一台 Mac 主端连接一台 Windows 子端；子端同时只接受一个主端会话 |
 | 网络 | 同一可信 IPv4 局域网；自动 UDP 广播发现，也可填写私有 IPv4 地址 |
 | 画面 | 单路视频，默认建议 1920×1080、30 FPS、8 Mbps |
-| 记忆 | 本机保存分辨率、帧率、码率、最近设备、已发现/手动添加设备和子端名称/端口 |
-| 当前不支持 | 音频、键鼠/触控回传、HDR、多子端、IPv6、跨公网、账号/配对/认证 |
+| 键鼠共享 | Mac 鼠标跨越屏幕边缘后控制 Windows；支持二维布局、按键/滚轮和纯文本剪贴板同步 |
+| 记忆 | 本机保存画面参数、最近设备、二维设备布局、边缘停留时间和剪贴板开关 |
+| 当前不支持 | 音频、触控、文件剪贴板、HDR、多子端、IPv6、跨公网、账号/配对/认证 |
 | 分发 | 不支持 Mac App Store；CI 产物未配置 Developer ID 签名、公证或 Windows 代码签名 |
 
 macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它可能在系统更新后变化或失效，因此本项目把相关逻辑隔离在独立 helper 进程中，但无法消除兼容性风险。
@@ -27,6 +28,9 @@ macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它�
 - Windows 子端通过 UDP 广播，Mac 主端监听并合并本机记忆列表。
 - WebSocket 信令、协议版本/消息大小/字段校验、单主端占用保护。
 - 主端主动连接、断开；子端可全屏并在会话期间阻止显示器休眠。
+- 独立的键鼠共享模式：不创建虚拟屏、不传输画面，使用可拖拽二维布局实现跨边缘切换。
+- Mac 全局键鼠捕获、Windows 本地输入注入、紧急返回快捷键 `⌃⌥⌘Esc`。
+- 双向纯文本剪贴板同步，远端内容写入后不会被立即回传形成循环。
 - 子端画面信息条默认隐藏，鼠标移动、触摸或键盘聚焦时短暂显示，避免遮挡扩展桌面。
 - JSON 设置持久化，最多记忆 32 台设备；离线设备仍可显示和删除。
 - 启动时及侧边栏手动检查 GitHub Releases；发现新版本后打开官方发布页，由用户下载并安装。
@@ -65,7 +69,9 @@ npm run build:native
 npm run dev:host
 ```
 
-按系统提示授予“屏幕与系统音频录制”（不同 macOS 版本名称可能略有不同）和本地网络访问权限；修改权限后完全退出并重新启动 LanExtend。
+按系统提示授予“屏幕与系统音频录制”（不同 macOS 版本名称可能略有不同）和本地网络访问权限。安装包用户应只从 `/Applications/LanExtend.app` 启动；授权后返回应用会自动重新检测。源码目录或构建目录中的副本会被 macOS 当作不同的权限主体。
+
+键鼠共享不需要屏幕录制，但首次启动时需要 macOS“辅助功能”权限；这是系统捕获全局键鼠事件的必要条件。
 
 ### 4. 创建并投放扩展屏
 
@@ -76,6 +82,15 @@ npm run dev:host
 5. 如果私有虚拟显示不可用，GUI 会切到“已有显示器”兼容模式；此时才需要手动选择捕获源。选择已有屏会发送该屏全部内容，请先清除敏感信息。
 6. 使用主端“断开扩展屏”结束投放；由本会话自动创建的虚拟显示器会随断开清理。
 
+### 5. 启动键鼠和剪贴板共享
+
+1. 在同一个设备列表选择 Windows 子端，然后滚动到“键鼠与剪贴板共享”。
+2. 在布局画布中拖动橙色 Windows 屏幕，使其贴到对应 Mac 显示器的左、右、上或下边缘；“自动排列”会把它放到最上方 Mac 屏幕的右侧。
+3. 根据需要开启“双向剪贴板同步”，并设置边缘停留时间。默认 `80 ms` 兼顾快速切换和减少误触。
+4. 点击“启动键鼠共享”。此模式不会创建扩展屏，也不会发送任何屏幕画面。
+5. 鼠标越过相邻边缘后，键盘、鼠标按键和滚轮会控制 Windows；从 Windows 对应边缘移回即可返回 Mac。
+6. 任意时候按 `Control + Option + Command + Esc` 可强制把控制权返回 Mac。
+
 完整操作和未签名产物说明见[用户指南](docs/user-guide.md)。公开安装包可从 [GitHub Releases](https://github.com/Modole/LanExtend/releases) 获取。
 
 ## 架构概览
@@ -84,12 +99,14 @@ npm run dev:host
 flowchart LR
   subgraph H["macOS 主端（最高控制权）"]
     GUIH["Electron GUI"] --> VD["CGVirtualDisplay helper"]
+    GUIH --> IH["全局键鼠 helper"]
     VD --> CAP["虚拟显示器 / 屏幕捕获"]
     GUIH --> MEMH["本机 settings.json"]
     CAP --> RTC1["WebRTC 发送端"]
   end
   subgraph R["Windows 子端"]
     GUIR["Electron GUI"] --> RTCR["WebRTC 接收端"]
+    GUIR --> IW["Windows 输入 helper"]
     GUIR --> MEMR["本机 settings.json"]
     GUIR --> ADV["UDP 广播"]
     GUIR --> SIG["WebSocket 信令服务"]
@@ -97,6 +114,7 @@ flowchart LR
   ADV -- "UDP/47771" --> GUIH
   GUIH -- "ws://子端:47772" --> SIG
   RTC1 -- "WebRTC 加密媒体（单路视频）" --> RTCR
+  IH -- "WebSocket 键鼠 / 剪贴板" --> IW
 ```
 
 发现报文只用于定位子端；远端媒体不经过云服务。WebRTC 媒体本身使用其标准加密传输，但**设备身份、发现和 WebSocket 信令均未认证**，所以必须把整个二层/三层局域网视为信任边界。

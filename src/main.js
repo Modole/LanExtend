@@ -5,6 +5,7 @@ const { pathToFileURL } = require('node:url');
 const {
   app,
   BrowserWindow,
+  clipboard,
   desktopCapturer,
   ipcMain,
   Menu,
@@ -17,8 +18,9 @@ const {
 } = require('electron');
 const { ConfigStore } = require('./core/config-store');
 const { PROTOCOL_VERSION } = require('./core/constants');
+const { ClipboardSync, MacInputController, WindowsInputController } = require('./core/input-controller');
 const { DiscoveryAdvertiser, DiscoveryListener, SignalServer } = require('./core/network');
-const { isPrivateIPv4, isValidPort } = require('./core/protocol');
+const { isPrivateIPv4, isValidPort, makeSignal } = require('./core/protocol');
 const {
   MAX_RELEASE_RESPONSE_BYTES,
   RELEASE_API_URL,
@@ -51,6 +53,11 @@ let serviceError = null;
 let rendererReady = false;
 let pendingRendererEvents = [];
 let cleanupStarted = false;
+let lastScreenPermission = null;
+let hostInputController;
+let receiverInputController;
+let inputClipboard;
+let receiverInputSessionId = null;
 
 function emitToRenderer(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -72,6 +79,66 @@ function mediaPermissionStatus() {
   } catch {
     return 'unknown';
   }
+}
+
+function publishScreenPermission() {
+  const status = mediaPermissionStatus();
+  if (status !== lastScreenPermission) {
+    lastScreenPermission = status;
+    emitToRenderer('permission:screen-changed', status);
+  }
+  return status;
+}
+
+function accessibilityPermissionStatus(prompt = false) {
+  if (process.platform !== 'darwin') return true;
+  try {
+    return systemPreferences.isTrustedAccessibilityClient(Boolean(prompt));
+  } catch {
+    return false;
+  }
+}
+
+function inputHelperPaths() {
+  if (app.isPackaged) {
+    return {
+      mac: path.join(process.resourcesPath, 'native', 'lanextend-input'),
+      windows: path.join(process.resourcesPath, 'native', 'lanextend-input.ps1')
+    };
+  }
+  return {
+    mac: path.join(PROJECT_ROOT, 'native', 'macos', '.build', 'lanextend-input'),
+    windows: path.join(PROJECT_ROOT, 'native', 'windows', 'lanextend-input.ps1')
+  };
+}
+
+function receiverDisplayInfo() {
+  const primary = screen.getPrimaryDisplay();
+  const scaleFactor = Number(primary.scaleFactor) || 1;
+  return {
+    // Electron reports Display.size in DIP. The DPI-aware Windows helper uses
+    // physical SetCursorPos coordinates, so advertise the matching pixel size.
+    width: Math.max(320, Math.round((primary.size?.width || primary.bounds.width || 1920) * scaleFactor)),
+    height: Math.max(240, Math.round((primary.size?.height || primary.bounds.height || 1080) * scaleFactor)),
+    scaleFactor
+  };
+}
+
+function stopClipboardSync() {
+  inputClipboard?.stop();
+  inputClipboard = null;
+}
+
+function startClipboardSync(send, origin, sendInitial = true) {
+  stopClipboardSync();
+  inputClipboard = new ClipboardSync({
+    readText: () => clipboard.readText(),
+    writeText: (text) => clipboard.writeText(text),
+    send,
+    origin
+  });
+  inputClipboard.on('warning', (message) => emitToRenderer('input:warning', { message }));
+  inputClipboard.start(sendInitial);
 }
 
 async function checkReleasePageFallback(signal) {
@@ -191,7 +258,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   });
   Menu.setApplicationMenu(null);
@@ -199,6 +267,7 @@ function createWindow() {
     query: { role }
   });
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('focus', () => publishScreenPermission());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) shell.openExternal(url);
     return { action: 'deny' };
@@ -233,6 +302,9 @@ async function startHostServices() {
 }
 
 async function stopReceiverServices() {
+  receiverInputController?.stop();
+  receiverInputSessionId = null;
+  stopClipboardSync();
   advertiser?.stop();
   advertiser = null;
   await signalServer?.stop();
@@ -244,15 +316,33 @@ async function stopReceiverServices() {
 }
 
 async function startReceiverServices() {
-  const receiver = configStore.get().receiver;
+  const receiver = {
+    ...configStore.get().receiver,
+    capabilities: ['video', 'fullscreen', 'input', 'clipboard'],
+    display: receiverDisplayInfo()
+  };
   try {
     signalServer = new SignalServer(receiver, { port: receiver.port });
     signalServer.on('connected', (connection) => {
       if (sleepBlockerId === null) sleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
       emitToRenderer('receiver:connected', connection);
     });
-    signalServer.on('message', (event) => emitToRenderer('receiver:signal', event));
+    signalServer.on('message', (event) => {
+      handleReceiverInputMessage(event).catch((error) => {
+        if (process.env.LANEXTEND_DEBUG) console.warn('[input]', error.message);
+        signalServer?.send(event.sessionId, makeSignal('control', {
+          action: 'error', message: error.message.slice(0, 512)
+        }));
+        emitToRenderer('input:receiver-status', { running: false, error: error.message });
+      });
+    });
     signalServer.on('disconnected', (event) => {
+      if (receiverInputSessionId === event.sessionId) {
+        receiverInputController?.stop();
+        receiverInputSessionId = null;
+        stopClipboardSync();
+        emitToRenderer('input:receiver-status', { running: false, active: false });
+      }
       if (sleepBlockerId !== null) {
         powerSaveBlocker.stop(sleepBlockerId);
         sleepBlockerId = null;
@@ -295,6 +385,51 @@ async function startReceiverServices() {
   }
 }
 
+async function handleReceiverInputMessage(event) {
+  const { sessionId, message } = event;
+  if (message.type === 'control' && message.action === 'share-start') {
+    await receiverInputController.start();
+    receiverInputSessionId = sessionId;
+    const display = receiverDisplayInfo();
+    signalServer.send(sessionId, makeSignal('control', {
+      action: 'share-ready', clipboard: Boolean(message.clipboard), screen: display
+    }));
+    if (message.clipboard) {
+      startClipboardSync(
+        (payload) => signalServer?.send(sessionId, makeSignal(payload.type, payload)),
+        `windows-${configStore.get().receiver.id}`,
+        false
+      );
+    } else stopClipboardSync();
+    emitToRenderer('input:receiver-status', {
+      running: true, active: false, clipboard: Boolean(message.clipboard), screen: display
+    });
+    return;
+  }
+  if (message.type === 'control' && message.action === 'share-stop') {
+    receiverInputController?.stop();
+    receiverInputSessionId = null;
+    stopClipboardSync();
+    emitToRenderer('input:receiver-status', { running: false, active: false });
+    return;
+  }
+  if (message.type === 'control' && (message.action === 'active' || message.action === 'inactive')) {
+    emitToRenderer('input:receiver-status', {
+      running: true, active: message.action === 'active', clipboard: Boolean(inputClipboard)
+    });
+    return;
+  }
+  if (message.type === 'input') {
+    if (sessionId === receiverInputSessionId) receiverInputController?.send(message.event);
+    return;
+  }
+  if (message.type === 'clipboard') {
+    if (sessionId === receiverInputSessionId) inputClipboard?.applyRemote(message);
+    return;
+  }
+  emitToRenderer('receiver:signal', event);
+}
+
 function registerIpc() {
   ipcMain.handle('app:renderer-ready', () => {
     rendererReady = true;
@@ -318,7 +453,7 @@ function registerIpc() {
       appVersion: app.getVersion(),
       settings: configStore.get(),
       devices: role === 'host' ? mergedDevices() : [],
-      permission: mediaPermissionStatus(),
+      permission: publishScreenPermission(),
       virtualDisplay: { ...displayStatus, capability },
       serviceError,
       displays: screen.getAllDisplays().map((display) => ({
@@ -326,7 +461,14 @@ function registerIpc() {
         label: display.label,
         bounds: display.bounds,
         scaleFactor: display.scaleFactor
-      }))
+      })),
+      inputSharing: {
+        supported: role === 'host' ? hostInputController.supported : receiverInputController.supported,
+        accessibility: role === 'host' ? accessibilityPermissionStatus(false) : true,
+        status: role === 'host'
+          ? hostInputController.status()
+          : { supported: receiverInputController.supported, running: false, active: false }
+      }
     };
   });
   ipcMain.handle('updates:check', () => checkForUpdates());
@@ -407,6 +549,37 @@ function registerIpc() {
     return signalServer?.disconnect(String(sessionId), reason) || false;
   });
 
+  ipcMain.handle('input:host-start', async (_event, layout, clipboardEnabled) => {
+    if (role !== 'host') throw new Error('只有 Mac 主端可以捕获本机键鼠');
+    await hostInputController.start(layout);
+    if (clipboardEnabled) {
+      startClipboardSync(
+        (payload) => emitToRenderer('input:outbound', payload),
+        `mac-${configStore.get().receiver.id}`
+      );
+    } else stopClipboardSync();
+    return hostInputController.status();
+  });
+  ipcMain.handle('input:host-stop', () => {
+    hostInputController?.stop();
+    stopClipboardSync();
+    return hostInputController?.status() || { supported: false, running: false, active: false };
+  });
+  ipcMain.handle('input:apply-clipboard', (_event, message) => inputClipboard?.applyRemote(message) || false);
+  ipcMain.handle('input:get-status', () => ({
+    supported: role === 'host' ? hostInputController.supported : receiverInputController.supported,
+    accessibility: role === 'host' ? accessibilityPermissionStatus(false) : true,
+    status: role === 'host'
+      ? hostInputController.status()
+      : { supported: receiverInputController.supported, running: Boolean(receiverInputSessionId) }
+  }));
+  ipcMain.handle('permission:request-accessibility', () => accessibilityPermissionStatus(true));
+  ipcMain.handle('permission:open-accessibility-settings', async () => {
+    if (process.platform !== 'darwin') return false;
+    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    return true;
+  });
+
   ipcMain.handle('window:toggle-fullscreen', () => {
     mainWindow.setFullScreen(!mainWindow.isFullScreen());
     return mainWindow.isFullScreen();
@@ -415,6 +588,7 @@ function registerIpc() {
     mainWindow.setFullScreen(Boolean(enabled));
     return mainWindow.isFullScreen();
   });
+  ipcMain.handle('permission:get-screen-status', () => publishScreenPermission());
   ipcMain.handle('permission:open-screen-settings', async () => {
     if (process.platform !== 'darwin') return false;
     await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
@@ -426,6 +600,9 @@ function registerIpc() {
 }
 
 async function cleanup() {
+  hostInputController?.stop();
+  receiverInputController?.stop();
+  stopClipboardSync();
   discoveryListener?.stop();
   await stopReceiverServices();
   await virtualDisplay?.destroy();
@@ -450,6 +627,18 @@ if (!allowMultipleInstances && !app.requestSingleInstanceLock()) {
         resourcesPath: process.resourcesPath,
         projectRoot: PROJECT_ROOT
       })
+    });
+    const helperPaths = inputHelperPaths();
+    hostInputController = new MacInputController({ executable: helperPaths.mac });
+    receiverInputController = new WindowsInputController({ script: helperPaths.windows });
+    hostInputController.on('outbound', (payload) => emitToRenderer('input:outbound', payload));
+    hostInputController.on('status', (status) => emitToRenderer('input:host-status', status));
+    hostInputController.on('warning', (message) => {
+      if (process.env.LANEXTEND_DEBUG) console.warn('[input-helper]', message);
+    });
+    hostInputController.on('error', (error) => emitToRenderer('input:warning', { message: error.message }));
+    receiverInputController.on('warning', (message) => {
+      if (process.env.LANEXTEND_DEBUG) console.warn('[input-helper]', message);
     });
     virtualDisplay.on('stopped', () => emitToRenderer('display:changed', virtualDisplay.getStatus()));
     createWindow();

@@ -47,10 +47,36 @@ test('signal validation accepts SDP and ICE messages', () => {
 
 test('signal validation rejects unknown type, wrong version and oversized name', () => {
   assert.throws(() => parseSignalMessage('{"type":"root","protocol":1}'), /不支持/);
-  assert.throws(() => parseSignalMessage('{"type":"ping","protocol":2,"timestamp":1}'), /版本/);
-  assert.throws(() => parseSignalMessage(JSON.stringify({
-    type: 'hello', protocol: 1, hostId: 'x', name: 'a'.repeat(65)
-  })), /主端信息/);
+  assert.throws(() => parseSignalMessage('{"type":"ping","protocol":999,"timestamp":1}'), /版本/);
+  assert.throws(() => parseSignalMessage(JSON.stringify(makeSignal('hello', {
+    hostId: 'x', name: 'a'.repeat(65)
+  }))), /主端信息/);
+});
+
+test('keyboard, mouse and clipboard messages are validated', () => {
+  const pointer = makeSignal('input', { event: { kind: 'pointer', x: 1440, y: 720 } });
+  assert.deepEqual(parseSignalMessage(JSON.stringify(pointer)), pointer);
+  const key = makeSignal('input', { event: { kind: 'key', vk: 0x41, down: true } });
+  assert.deepEqual(parseSignalMessage(JSON.stringify(key)), key);
+  const clipboard = makeSignal('clipboard', { text: '跨设备文本', revision: 'mac:1' });
+  assert.deepEqual(parseSignalMessage(JSON.stringify(clipboard)), clipboard);
+  assert.throws(() => parseSignalMessage(JSON.stringify(makeSignal('input', {
+    event: { kind: 'key', vk: 999, down: true }
+  }))), /键盘事件/);
+  assert.throws(() => parseSignalMessage(JSON.stringify(makeSignal('clipboard', {
+    text: 'x'.repeat(129 * 1024), revision: 'too-large'
+  }))), /剪贴板/);
+});
+
+test('input sharing capabilities and receiver display are advertised', () => {
+  const beacon = makeBeacon({
+    id: 'receiver-input', name: 'Windows', port: 47772,
+    display: { width: 2560, height: 1440, scaleFactor: 1.5 }
+  });
+  const parsed = parseBeacon(Buffer.from(JSON.stringify(beacon)), '192.168.1.20');
+  assert.ok(parsed.capabilities.includes('input'));
+  assert.ok(parsed.capabilities.includes('clipboard'));
+  assert.deepEqual(parsed.display, { width: 2560, height: 1440, scaleFactor: 1.5 });
 });
 
 test('disconnect reasons use a bounded UTF-8 representation', () => {

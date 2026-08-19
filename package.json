@@ -1,7 +1,7 @@
 {
   "name": "lanextend",
-  "version": "0.2.0",
-  "description": "LAN virtual extended display: macOS host to Windows receiver",
+  "version": "0.3.0",
+  "description": "LAN extended display and seamless keyboard, mouse and clipboard sharing",
   "main": "src/main.js",
   "author": "LanExtend contributors",
   "license": "MIT",
@@ -48,8 +48,13 @@
     "mac": {
       "category": "public.app-category.utilities",
       "minimumSystemVersion": "14.0",
-      "hardenedRuntime": true,
+      "identity": "-",
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "binaries": [
+        "Contents/Resources/native/lanextend-vdisplay",
+        "Contents/Resources/native/lanextend-input"
+      ],
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "LanExtend 需要捕获虚拟扩展屏并将画面发送到您选择的局域网设备。",
         "NSLocalNetworkUsageDescription": "LanExtend 使用局域网发现并连接您的 Windows 子端。"
@@ -58,6 +63,10 @@
         {
           "from": "native/macos/.build/lanextend-vdisplay",
           "to": "native/lanextend-vdisplay"
+        },
+        {
+          "from": "native/macos/.build/lanextend-input",
+          "to": "native/lanextend-input"
         }
       ]
     },
@@ -65,6 +74,12 @@
       "target": [
         "portable",
         "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "native/windows/lanextend-input.ps1",
+          "to": "native/lanextend-input.ps1"
+        }
       ]
     }
   }

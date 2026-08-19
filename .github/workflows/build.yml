@@ -42,14 +42,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          helper="native/macos/.build/lanextend-vdisplay"
-          test -f "$helper"
-          lipo "$helper" -verify_arch arm64 x86_64
+          display_helper="native/macos/.build/lanextend-vdisplay"
+          input_helper="native/macos/.build/lanextend-input"
+          test -f "$display_helper"
+          test -f "$input_helper"
+          lipo "$display_helper" -verify_arch arm64 x86_64
+          lipo "$input_helper" -verify_arch arm64 x86_64
 
           app_binary="$(find release -type f -path '*/LanExtend.app/Contents/MacOS/LanExtend' -print -quit)"
           test -n "$app_binary"
           lipo "$app_binary" -verify_arch arm64 x86_64
-          file "$helper" "$app_binary"
+          file "$display_helper" "$input_helper" "$app_binary"
 
       - name: Upload macOS packages
         uses: actions/upload-artifact@v4
