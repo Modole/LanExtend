@@ -1003,6 +1003,26 @@ select:focus-visible {
 .input-live-status.is-active .status-light { background: var(--accent); box-shadow: 0 0 11px rgba(94, 231, 197, 0.7); }
 .input-live-status.is-active { border-color: rgba(94, 231, 197, 0.17); background: rgba(94, 231, 197, 0.04); }
 
+.file-transfer-card {
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid rgba(91, 185, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(32, 91, 138, 0.08);
+}
+.file-transfer-card[hidden] { display: none; }
+.file-transfer-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.file-transfer-heading > div { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.file-transfer-heading strong { overflow: hidden; color: #bdd0df; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.file-transfer-heading small { color: #71869a; font-size: 8px; }
+.file-transfer-icon { display: grid; place-items: center; flex: 0 0 auto; width: 27px; height: 27px; border-radius: 8px; background: rgba(91, 185, 255, 0.12); color: #82c8fa; font-size: 13px; }
+.file-transfer-card progress { width: 100%; height: 5px; overflow: hidden; border: 0; border-radius: 999px; background: #172b3c; appearance: none; }
+.file-transfer-card progress::-webkit-progress-bar { border-radius: 999px; background: #172b3c; }
+.file-transfer-card progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, var(--blue), var(--accent)); transition: width 120ms linear; }
+.file-transfer-card.is-complete { border-color: rgba(94, 231, 197, 0.24); background: rgba(94, 231, 197, 0.06); }
+.file-transfer-card.is-error { border-color: rgba(255, 112, 112, 0.24); background: rgba(255, 112, 112, 0.05); }
+
 .receiver-input-visual { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 76px; margin-bottom: 8px; }
 .input-link-line { position: relative; width: 70px; height: 1px; background: rgba(91, 185, 255, 0.2); }
 .input-link-line i { position: absolute; top: -2px; left: 0; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); animation: input-link 1.8s linear infinite; }

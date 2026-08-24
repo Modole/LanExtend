@@ -53,12 +53,14 @@ test('input sharing layout and clipboard settings are durable', (t) => {
   store.updateSettings({ inputSharing: {
     lastDeviceId: 'win-input',
     clipboard: true,
+    fileClipboard: false,
     edgeDelayMs: 160,
     layouts: [{ deviceId: 'win-input', x: 2560, y: 0, width: 1920, height: 1080 }]
   } });
   const reloaded = new ConfigStore(directory).get().inputSharing;
   assert.equal(reloaded.lastDeviceId, 'win-input');
   assert.equal(reloaded.clipboard, true);
+  assert.equal(reloaded.fileClipboard, false);
   assert.equal(reloaded.edgeDelayMs, 160);
   assert.deepEqual(reloaded.layouts[0], {
     deviceId: 'win-input', x: 2560, y: 0, width: 1920, height: 1080

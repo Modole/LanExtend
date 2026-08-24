@@ -13,9 +13,9 @@ LanExtend 是一个面向局域网的 Mac/Windows 双端协作工具，包含两
 | 拓扑 | 一台 Mac 主端连接一台 Windows 子端；子端同时只接受一个主端会话 |
 | 网络 | 同一可信 IPv4 局域网；自动 UDP 广播发现，也可填写私有 IPv4 地址 |
 | 画面 | 单路视频，默认建议 1920×1080、30 FPS、8 Mbps |
-| 键鼠共享 | Mac 鼠标跨越屏幕边缘后控制 Windows；支持二维布局、按键/滚轮和纯文本剪贴板同步 |
+| 键鼠共享 | Mac 鼠标跨越屏幕边缘后控制 Windows；支持二维布局、按键/滚轮、文本及文件/文件夹剪贴板同步 |
 | 记忆 | 本机保存画面参数、最近设备、二维设备布局、边缘停留时间和剪贴板开关 |
-| 当前不支持 | 音频、触控、文件剪贴板、HDR、多子端、IPv6、跨公网、账号/配对/认证 |
+| 当前不支持 | 音频、触控、图片/富文本剪贴板、HDR、多子端、IPv6、跨公网、账号/配对/认证 |
 | 分发 | 不支持 Mac App Store；CI 产物未配置 Developer ID 签名、公证或 Windows 代码签名 |
 
 macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它可能在系统更新后变化或失效，因此本项目把相关逻辑隔离在独立 helper 进程中，但无法消除兼容性风险。
@@ -30,7 +30,7 @@ macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它�
 - 主端主动连接、断开；子端可全屏并在会话期间阻止显示器休眠。
 - 独立的键鼠共享模式：不创建虚拟屏、不传输画面，使用可拖拽二维布局实现跨边缘切换。
 - Mac 全局键鼠捕获、Windows 本地输入注入、紧急返回快捷键 `⌃⌥⌘Esc`。
-- 双向纯文本剪贴板同步，远端内容写入后不会被立即回传形成循环。
+- 双向纯文本以及文件/文件夹剪贴板同步；文件采用流式传输和逐文件 SHA-256 校验，完成后可直接在 Finder/资源管理器粘贴。
 - 子端画面信息条默认隐藏，鼠标移动、触摸或键盘聚焦时短暂显示，避免遮挡扩展桌面。
 - JSON 设置持久化，最多记忆 32 台设备；离线设备仍可显示和删除。
 - 启动时及侧边栏手动检查 GitHub Releases；发现新版本后打开官方发布页，由用户下载并安装。
@@ -45,6 +45,7 @@ macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它�
 - Windows 子端**出站** UDP `47771`：广播发现；Mac 主端需要能接收入站发现报文；
 - Windows 子端**入站** TCP `47772`：默认 WebSocket 信令端口，可在子端 GUI 修改；
 - WebRTC 动态 UDP：双向媒体/连通性检查，由系统防火墙按 LanExtend 应用放行更合适。
+- 文件剪贴板动态 TCP：复制文件时由发送端临时监听随机高位端口，传完即释放；需按 LanExtend 应用允许两端专用网络入站。
 
 不要把这些端口映射到公网。当前发现和信令没有认证，信令也没有 TLS。
 
@@ -86,10 +87,11 @@ npm run dev:host
 
 1. 在同一个设备列表选择 Windows 子端，然后滚动到“键鼠与剪贴板共享”。
 2. 在布局画布中拖动橙色 Windows 屏幕，使其贴到对应 Mac 显示器的左、右、上或下边缘；“自动排列”会把它放到最上方 Mac 屏幕的右侧。
-3. 根据需要开启“双向剪贴板同步”，并设置边缘停留时间。默认 `80 ms` 兼顾快速切换和减少误触。
+3. 根据需要开启“纯文本剪贴板”和“文件与文件夹同步”，并设置边缘停留时间。默认 `80 ms` 兼顾快速切换和减少误触。
 4. 点击“启动键鼠共享”。此模式不会创建扩展屏，也不会发送任何屏幕画面。
 5. 鼠标越过相邻边缘后，键盘、鼠标按键和滚轮会控制 Windows；从 Windows 对应边缘移回即可返回 Mac。
 6. 任意时候按 `Control + Option + Command + Esc` 可强制把控制权返回 Mac。
+7. 在任一端复制文件、多个文件或文件夹；进度完成后，在另一端的 Finder/资源管理器中直接粘贴。单次最多 10000 个条目、总计 20 GiB，接收缓存保留 7 天后自动清理。
 
 完整操作和未签名产物说明见[用户指南](docs/user-guide.md)。公开安装包可从 [GitHub Releases](https://github.com/Modole/LanExtend/releases) 获取。
 
@@ -100,6 +102,7 @@ flowchart LR
   subgraph H["macOS 主端（最高控制权）"]
     GUIH["Electron GUI"] --> VD["CGVirtualDisplay helper"]
     GUIH --> IH["全局键鼠 helper"]
+    GUIH --> FH["按需文件流服务"]
     VD --> CAP["虚拟显示器 / 屏幕捕获"]
     GUIH --> MEMH["本机 settings.json"]
     CAP --> RTC1["WebRTC 发送端"]
@@ -107,6 +110,7 @@ flowchart LR
   subgraph R["Windows 子端"]
     GUIR["Electron GUI"] --> RTCR["WebRTC 接收端"]
     GUIR --> IW["Windows 输入 helper"]
+    GUIR --> FR["按需文件流服务"]
     GUIR --> MEMR["本机 settings.json"]
     GUIR --> ADV["UDP 广播"]
     GUIR --> SIG["WebSocket 信令服务"]
@@ -115,6 +119,7 @@ flowchart LR
   GUIH -- "ws://子端:47772" --> SIG
   RTC1 -- "WebRTC 加密媒体（单路视频）" --> RTCR
   IH -- "WebSocket 键鼠 / 剪贴板" --> IW
+  FH <-. "动态 TCP 文件流（双向）" .-> FR
 ```
 
 发现报文只用于定位子端；远端媒体不经过云服务。WebRTC 媒体本身使用其标准加密传输，但**设备身份、发现和 WebSocket 信令均未认证**，所以必须把整个二层/三层局域网视为信任边界。

@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName System.Windows.Forms
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -17,6 +19,9 @@ public static class LanExtendInput {
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetClipboardSequenceNumber();
 
     private const uint MOUSE_LEFT_DOWN = 0x0002;
     private const uint MOUSE_LEFT_UP = 0x0004;
@@ -81,16 +86,83 @@ public static class LanExtendInput {
 }
 '@
 
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$InputReader = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $Utf8NoBom)
+$OutputWriter = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), $Utf8NoBom)
+$OutputWriter.AutoFlush = $true
 [LanExtendInput]::Initialize()
-[Console]::Out.WriteLine('{"event":"ready","trusted":true}')
-[Console]::Out.Flush()
+$OutputWriter.WriteLine('{"event":"ready","trusted":true}')
+
+function Write-HelperResponse {
+    param(
+        [string]$RequestId,
+        [bool]$Ok,
+        [object]$Payload,
+        [string]$ErrorMessage
+    )
+    if ([string]::IsNullOrWhiteSpace($RequestId)) { return }
+    $response = [ordered]@{ event = 'response'; requestId = $RequestId; ok = $Ok }
+    if ($null -ne $Payload) {
+        foreach ($property in $Payload.PSObject.Properties) { $response[$property.Name] = $property.Value }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) { $response['error'] = $ErrorMessage }
+    $OutputWriter.WriteLine(($response | ConvertTo-Json -Compress -Depth 5))
+}
+
+function Set-FileClipboard {
+    param([object[]]$Paths)
+    $items = [System.Collections.Specialized.StringCollection]::new()
+    foreach ($path in @($Paths)) {
+        $value = [string]$path
+        if (-not [string]::IsNullOrWhiteSpace($value) -and (Test-Path -LiteralPath $value)) {
+            [void]$items.Add([System.IO.Path]::GetFullPath($value))
+        }
+    }
+    if ($items.Count -eq 0) { throw 'No files are available for the clipboard' }
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        try {
+            [System.Windows.Forms.Clipboard]::SetFileDropList($items)
+            return
+        } catch {
+            $lastError = $_.Exception
+            Start-Sleep -Milliseconds 80
+        }
+    }
+    throw $lastError
+}
 
 try {
-    while (($line = [Console]::In.ReadLine()) -ne $null) {
+    while (($line = $InputReader.ReadLine()) -ne $null) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $message = $line | ConvertFrom-Json
         if ($message.command -eq 'quit') { break }
+        if ($message.command -eq 'clipboard-read') {
+            try {
+                $paths = @()
+                if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+                    $paths = @([System.Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { [string]$_ })
+                }
+                Write-HelperResponse -RequestId ([string]$message.requestId) -Ok $true -Payload ([pscustomobject]@{
+                    paths = $paths
+                    revision = [LanExtendInput]::GetClipboardSequenceNumber()
+                }) -ErrorMessage ''
+            } catch {
+                Write-HelperResponse -RequestId ([string]$message.requestId) -Ok $false -Payload $null -ErrorMessage $_.Exception.Message
+            }
+            continue
+        }
+        if ($message.command -eq 'clipboard-write') {
+            try {
+                Set-FileClipboard -Paths @($message.paths)
+                Write-HelperResponse -RequestId ([string]$message.requestId) -Ok $true -Payload ([pscustomobject]@{
+                    revision = [LanExtendInput]::GetClipboardSequenceNumber()
+                }) -ErrorMessage ''
+            } catch {
+                Write-HelperResponse -RequestId ([string]$message.requestId) -Ok $false -Payload $null -ErrorMessage $_.Exception.Message
+            }
+            continue
+        }
         if ($message.command -ne 'input' -or $null -eq $message.event) { continue }
         $event = $message.event
         switch ($event.kind) {
@@ -103,4 +175,5 @@ try {
     }
 } finally {
     [LanExtendInput]::ReleaseAll()
+    $OutputWriter.Flush()
 }

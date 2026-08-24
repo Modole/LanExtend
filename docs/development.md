@@ -32,7 +32,7 @@ LanExtend/
 ├── src/
 │   ├── main.js                 Electron 主进程
 │   ├── preload.js              白名单 IPC 桥
-│   ├── core/                   配置、网络、协议和 helper 管理
+│   ├── core/                   配置、网络、协议、文件流和 helper 管理
 │   └── renderer/               两端 GUI 与 WebRTC
 ├── native/macos/               CGVirtualDisplay 与键鼠捕获 helper
 ├── native/windows/             Windows 键鼠注入 PowerShell helper
@@ -92,14 +92,14 @@ npm ci
 npm run dev:receiver
 ```
 
-确认 Windows 网络配置文件为“专用”：允许子端程序向 UDP `47771` 发出广播、从可信 Mac/子网接收配置的 TCP 信令端口，并允许 WebRTC 动态 UDP。Mac 端需要接收入站发现广播。不要对公用网络放行。
+确认 Windows 网络配置文件为“专用”：允许子端程序向 UDP `47771` 发出广播、从可信 Mac/子网接收配置的 TCP 信令端口，并允许 WebRTC 动态 UDP。文件剪贴板还会在当前复制端按需监听随机 TCP 端口，因此双端应按 LanExtend 应用而不是固定端口放行专用网络。Mac 端需要接收入站发现广播。不要对公用网络放行。
 
 ### 双机调试
 
 1. 先开子端，再开主端。
 2. 两端从各自终端启动，保留日志。
 3. 先用默认低风险参数跑通创建、发现、连接、画面、断开、清理。
-4. 再分别改变一个变量：Wi‑Fi、HiDPI、60 FPS、不同分辨率或重连。
+4. 再分别改变一个变量：Wi‑Fi、HiDPI、60 FPS、不同分辨率、重连或双向文件/目录复制。
 5. 每次记录 OS build、CPU 架构、网卡、分辨率、提交 SHA 和结果。
 
 启用网络警告日志：
@@ -131,7 +131,8 @@ npm test
 - 私有 IPv4、端口、发现报文和信令消息解析；
 - IPv4 广播地址计算和 WebSocket 单会话行为；
 - 虚拟显示参数验证、helper 路径与生命周期管理的可测试部分；
-- 二维布局边缘进入/退出、Mac→Windows 键码和剪贴板去重；
+- 二维布局边缘进入/退出、Mac→Windows 键码、文本/文件剪贴板去重；
+- 文件清单、跨平台名称、流式目录往返、逐文件 SHA-256、缓存清理和路径穿越拒绝；
 - JS/MJS 源码语法。
 
 当前自动化**没有**覆盖：
@@ -139,7 +140,7 @@ npm test
 - 真实 `CGVirtualDisplay` 在所有 macOS 14+ 版本/CPU 架构上的创建；
 - macOS 屏幕录制授权弹窗和捕获内容正确性；
 - Mac 到 Windows 的真实 WebRTC 编解码、GPU 使用、端到端延迟和丢包恢复；
-- Windows Defender 防火墙交互、全屏多显示器行为；
+- Windows Defender 防火墙交互、真实 CF_HDROP 写入/粘贴、全屏多显示器行为；
 - 安装、签名、公证、升级和长时间稳定性。
 
 这些项目必须执行[双机手工验收](acceptance.md)。

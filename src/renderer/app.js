@@ -1,9 +1,10 @@
 (() => {
   'use strict';
 
-  const PROTOCOL_VERSION = 2;
+  const PROTOCOL_VERSION = 3;
   const SIGNAL_TYPES = new Set([
-    'hello', 'offer', 'answer', 'ice', 'disconnect', 'ping', 'pong', 'control', 'input', 'clipboard'
+    'hello', 'offer', 'answer', 'ice', 'disconnect', 'ping', 'pong', 'control', 'input', 'clipboard',
+    'file-offer', 'file-status'
   ]);
   const DEFAULT_SIGNAL_PORT = 47772;
   const api = window.lanextend;
@@ -37,8 +38,9 @@
     inputLayout: null,
     inputAccessibility: false,
     inputStatus: { supported: false, running: false, active: false },
-    receiverInputStatus: { running: false, active: false, clipboard: false },
+    receiverInputStatus: { running: false, active: false, clipboard: false, files: false },
     pendingClipboard: null,
+    fileTransfer: null,
     inputDrag: null
   };
 
@@ -115,6 +117,56 @@
 
   function formatLatency(milliseconds) {
     return Number.isFinite(milliseconds) ? `${Math.max(0, Math.round(milliseconds))} ms` : '—';
+  }
+
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value < 1024) return `${Math.round(value)} B`;
+    if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
+    if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+    return `${(value / 1024 ** 3).toFixed(2)} GiB`;
+  }
+
+  function renderFileTransfer(event = {}) {
+    if (!event.transferId) return;
+    const previous = state.fileTransfer?.transferId === event.transferId ? state.fileTransfer : {};
+    const now = performance.now();
+    const elapsed = previous.sampledAt ? (now - previous.sampledAt) / 1000 : 0;
+    const byteDelta = Math.max(0, (Number(event.bytes) || 0) - (Number(previous.bytes) || 0));
+    const rate = elapsed > 0.05 && byteDelta > 0 ? byteDelta / elapsed : Number(previous.rate) || 0;
+    const transfer = { ...previous, ...event, rate, sampledAt: now };
+    state.fileTransfer = transfer;
+    const prefix = state.role === 'receiver' ? 'receiver' : 'host';
+    const card = byId(`${prefix}-file-transfer`);
+    const progress = byId(`${prefix}-file-transfer-progress`);
+    const cancel = byId(`${prefix}-file-transfer-cancel`);
+    if (!card || !progress || !cancel) return;
+    card.hidden = false;
+    card.classList.toggle('is-complete', ['completed', 'sent'].includes(transfer.status));
+    card.classList.toggle('is-error', ['error', 'canceled'].includes(transfer.status));
+    setText(`${prefix}-file-transfer-name`, transfer.name || '文件剪贴板传输');
+    const total = Math.max(0, Number(transfer.totalBytes) || 0);
+    const bytes = Math.max(0, Number(transfer.bytes) || 0);
+    progress.max = Math.max(1, total);
+    progress.value = Math.min(progress.max, bytes);
+    const labels = {
+      offered: '等待另一台设备接收',
+      sending: `正在发送 · ${formatBytes(bytes)} / ${formatBytes(total)} · ${formatBytes(rate)}/s`,
+      sent: '文件内容已发送，等待写入剪贴板',
+      receiving: `正在接收 · ${formatBytes(bytes)} / ${formatBytes(total)} · ${formatBytes(rate)}/s`,
+      completed: transfer.direction === 'send'
+        ? `对方已接收并写入文件剪贴板 · ${formatBytes(total)}`
+        : `已接收并写入文件剪贴板 · ${formatBytes(total)}`,
+      canceled: '传输已取消',
+      error: transfer.message || '文件传输失败'
+    };
+    setText(`${prefix}-file-transfer-detail`, labels[transfer.status] || '正在准备文件传输');
+    cancel.hidden = ['completed', 'sent', 'canceled', 'error'].includes(transfer.status);
+    if (transfer.status === 'completed' && previous.status !== 'completed') {
+      toast('文件剪贴板已同步', '现在可以直接在 Finder 或资源管理器中粘贴');
+    } else if (transfer.status === 'error' && previous.status !== 'error') {
+      toast('文件传输失败', transfer.message || '请重新复制后再试', 'error', 7200);
+    }
   }
 
   function formatLastSeen(device) {
@@ -220,6 +272,9 @@
     if (message.type === 'control') {
       const actions = new Set(['share-start', 'share-ready', 'share-stop', 'active', 'inactive', 'error']);
       if (!actions.has(message.action)) throw new Error('收到的键鼠控制信令无效');
+      if (message.files !== undefined && typeof message.files !== 'boolean') {
+        throw new Error('收到的文件剪贴板设置无效');
+      }
       if (message.screen !== undefined
         && (!message.screen || !Number.isInteger(message.screen.width) || !Number.isInteger(message.screen.height))) {
         throw new Error('收到的屏幕信息无效');
@@ -234,6 +289,37 @@
         || new TextEncoder().encode(message.text).byteLength > 128 * 1024
         || typeof message.revision !== 'string')) {
       throw new Error('收到的剪贴板消息无效');
+    }
+    if (message.type === 'file-offer') {
+      const transfer = message.transfer;
+      if (!transfer
+        || typeof transfer.id !== 'string'
+        || !/^[0-9a-f-]{36}$/.test(transfer.id)
+        || !Number.isInteger(transfer.port) || transfer.port < 1 || transfer.port > 65_535
+        || !Number.isInteger(transfer.itemCount) || transfer.itemCount < 1 || transfer.itemCount > 10_000
+        || !Number.isSafeInteger(transfer.totalBytes) || transfer.totalBytes < 0 || transfer.totalBytes > 20 * 1024 ** 3
+        || !Array.isArray(transfer.names) || transfer.names.length < 1 || transfer.names.length > 16
+        || transfer.names.some((name) => typeof name !== 'string' || !name
+          || name.length > 180 || new TextEncoder().encode(name).byteLength > 512
+          || /[\u0000-\u001f<>:"/\\|?*]/.test(name) || /[. ]$/.test(name)
+          || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name))
+        || !Number.isSafeInteger(transfer.expiresAt) || transfer.expiresAt <= 0) {
+        throw new Error('收到的文件传输清单无效');
+      }
+    }
+    if (message.type === 'file-status'
+      && (typeof message.transferId !== 'string'
+        || !/^[0-9a-f-]{36}$/.test(message.transferId)
+        || !['receiving', 'completed', 'canceled', 'error'].includes(message.status)
+        || (message.bytes !== undefined
+          && (!Number.isSafeInteger(message.bytes) || message.bytes < 0 || message.bytes > 20 * 1024 ** 3))
+        || (message.totalBytes !== undefined
+          && (!Number.isSafeInteger(message.totalBytes) || message.totalBytes < 0
+            || message.totalBytes > 20 * 1024 ** 3))
+        || (message.message !== undefined
+          && (typeof message.message !== 'string'
+            || new TextEncoder().encode(message.message).byteLength > 512)))) {
+      throw new Error('收到的文件传输状态无效');
     }
     return message;
   }
@@ -398,6 +484,7 @@
       if (state.role === 'receiver') renderReceiverInputStatus(status);
     });
     api.onInputWarning((event) => toast('键鼠共享提示', errorText(event?.message), 'warning', 6200));
+    api.onFileTransfer((event) => renderFileTransfer(event));
   }
 
   function applyHostSettings(settings) {
@@ -417,6 +504,7 @@
     state.selectedDeviceId = host.lastDeviceId || null;
     const input = settings.inputSharing || {};
     byId('clipboard-sync').checked = input.clipboard !== false;
+    byId('file-clipboard-sync').checked = input.fileClipboard !== false;
     byId('input-auto-reconnect').checked = input.autoReconnect !== false;
     byId('input-edge-delay').value = String(Number.isInteger(input.edgeDelayMs) ? input.edgeDelayMs : 80);
     setText('input-edge-delay-output', `${byId('input-edge-delay').value} ms`);
@@ -501,6 +589,7 @@
     return {
       lastDeviceId: state.selectedDeviceId,
       clipboard: byId('clipboard-sync').checked,
+      fileClipboard: byId('file-clipboard-sync').checked,
       autoReconnect: byId('input-auto-reconnect').checked,
       edgeDelayMs: Number(byId('input-edge-delay').value) || 0,
       layouts
@@ -653,7 +742,11 @@
     });
     byId('input-edge-delay').addEventListener('change', () => persistInputOptions().catch(() => {}));
     byId('clipboard-sync').addEventListener('change', () => persistInputOptions().catch(() => {}));
+    byId('file-clipboard-sync').addEventListener('change', () => persistInputOptions().catch(() => {}));
     byId('input-auto-reconnect').addEventListener('change', () => persistInputOptions().catch(() => {}));
+    byId('host-file-transfer-cancel').addEventListener('click', () => {
+      if (state.fileTransfer?.transferId) api.cancelFileTransfer(state.fileTransfer.transferId);
+    });
     window.addEventListener('pointermove', moveInputLayoutDrag);
     window.addEventListener('pointerup', endInputLayoutDrag);
     window.addEventListener('pointercancel', endInputLayoutDrag);
@@ -1268,6 +1361,7 @@
           sendHostSignal(connection, makeSignal('control', {
             action: 'share-start',
             clipboard: connection.options.clipboard,
+            files: connection.options.fileClipboard,
             screen: { width: layout.width, height: layout.height }
           }));
           clearTimeout(connection.negotiationTimer);
@@ -1292,7 +1386,7 @@
           locals: localDisplayRects(),
           remote: { ...layout },
           edgeDelayMs: connection.options.edgeDelayMs
-        }, connection.options.clipboard);
+        }, connection.options.clipboard, connection.options.fileClipboard);
         if (state.pendingClipboard) {
           await api.applyRemoteClipboard(state.pendingClipboard);
           state.pendingClipboard = null;
@@ -1306,6 +1400,15 @@
     if (message.type === 'clipboard') {
       const applied = await api.applyRemoteClipboard(message);
       if (!applied) state.pendingClipboard = message;
+      return;
+    }
+    if (message.type === 'file-offer') {
+      if (connection.mode !== 'input' || !connection.options.fileClipboard) return;
+      await api.receiveFileOffer(message, connection.device.host);
+      return;
+    }
+    if (message.type === 'file-status') {
+      await api.applyFileStatus(message);
       return;
     }
     if (message.type === 'input') return;
@@ -1692,6 +1795,9 @@
     byId('receiver-fullscreen-top').addEventListener('click', () => setReceiverFullscreen(!state.receiverFullscreen));
     byId('receiver-fullscreen-overlay').addEventListener('click', () => setReceiverFullscreen(!state.receiverFullscreen));
     byId('receiver-disconnect-overlay').addEventListener('click', () => disconnectReceiver('由子端断开'));
+    byId('receiver-file-transfer-cancel').addEventListener('click', () => {
+      if (state.fileTransfer?.transferId) api.cancelFileTransfer(state.fileTransfer.transferId);
+    });
     byId('play-video').addEventListener('click', async () => {
       try {
         await byId('remote-video').play();
@@ -1751,6 +1857,10 @@
 
   function renderReceiverInputStatus(status = {}) {
     state.receiverInputStatus = { ...state.receiverInputStatus, ...status };
+    if (status.running === false) {
+      if (status.clipboard === undefined) state.receiverInputStatus.clipboard = false;
+      if (status.files === undefined) state.receiverInputStatus.files = false;
+    }
     const current = state.receiverInputStatus;
     const badge = byId('receiver-input-badge');
     if (!badge) return;
@@ -1775,7 +1885,8 @@
       badge.className = status.error ? 'capability-badge is-error' : 'capability-badge';
       setText('receiver-input-state', status.error || '等待 Mac');
     }
-    setText('receiver-clipboard-state', current.clipboard ? '双向同步中' : '未启动');
+    setText('receiver-clipboard-state', current.clipboard ? '纯文本同步中' : '未启动');
+    setText('receiver-file-clipboard-state', current.files ? '文件与文件夹同步中' : '未启动');
   }
 
   async function saveReceiverSettings(event) {
@@ -2044,7 +2155,7 @@
       supported: Boolean(bootstrap.inputSharing?.supported)
     };
     setRoleVisibility(state.role);
-    setText('app-version', `扩展屏与键鼠共享 · ${bootstrap.appVersion || '0.3.0'}`);
+    setText('app-version', `扩展屏与键鼠共享 · ${bootstrap.appVersion || '0.4.1'}`);
     setText('protocol-chip', `协议 v${bootstrap.protocolVersion}`);
     bindUpdateUi();
 

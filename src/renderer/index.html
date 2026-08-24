@@ -105,7 +105,7 @@
             <h1 id="page-title">扩展工作台</h1>
           </div>
           <div class="topbar-actions">
-            <span id="protocol-chip" class="soft-chip">协议 v2</span>
+            <span id="protocol-chip" class="soft-chip">协议 v3</span>
             <button id="refresh-devices" class="icon-button role-only host-only" type="button" title="刷新设备列表" aria-label="刷新设备列表">
               <span class="refresh-glyph" aria-hidden="true"></span>
             </button>
@@ -326,6 +326,10 @@
                     <span><strong>双向剪贴板同步</strong><small>自动同步两台设备的纯文本剪贴板</small></span>
                     <input id="clipboard-sync" class="switch-input" type="checkbox" checked><i></i>
                   </label>
+                  <label class="switch-row" for="file-clipboard-sync">
+                    <span><strong>文件与文件夹同步</strong><small>复制后流式传输，接收完成即可直接粘贴</small></span>
+                    <input id="file-clipboard-sync" class="switch-input" type="checkbox" checked><i></i>
+                  </label>
                   <label class="switch-row" for="input-auto-reconnect">
                     <span><strong>断线自动恢复</strong><small>继续使用上次设备和屏幕布局</small></span>
                     <input id="input-auto-reconnect" class="switch-input" type="checkbox" checked><i></i>
@@ -344,6 +348,15 @@
                 <div id="input-live-status" class="input-live-status">
                   <span class="status-light"></span>
                   <div><strong>尚未启动</strong><small>鼠标仍由 Mac 控制</small></div>
+                </div>
+
+                <div id="host-file-transfer" class="file-transfer-card" hidden>
+                  <div class="file-transfer-heading">
+                    <span class="file-transfer-icon">⇄</span>
+                    <div><strong id="host-file-transfer-name">文件传输</strong><small id="host-file-transfer-detail">正在准备</small></div>
+                    <button id="host-file-transfer-cancel" class="button button-small button-quiet" type="button">取消</button>
+                  </div>
+                  <progress id="host-file-transfer-progress" max="1" value="0"></progress>
                 </div>
 
                 <button id="input-connect-button" class="button button-primary button-connect" type="button" disabled>
@@ -450,7 +463,16 @@
               <div class="status-detail-list">
                 <div><span>键鼠控制</span><strong id="receiver-input-state">等待 Mac</strong></div>
                 <div><span>剪贴板同步</span><strong id="receiver-clipboard-state">未启动</strong></div>
+                <div><span>文件剪贴板</span><strong id="receiver-file-clipboard-state">未启动</strong></div>
                 <div><span>切换方式</span><strong>移动到屏幕边缘</strong></div>
+              </div>
+              <div id="receiver-file-transfer" class="file-transfer-card" hidden>
+                <div class="file-transfer-heading">
+                  <span class="file-transfer-icon">⇄</span>
+                  <div><strong id="receiver-file-transfer-name">文件传输</strong><small id="receiver-file-transfer-detail">正在准备</small></div>
+                  <button id="receiver-file-transfer-cancel" class="button button-small button-quiet" type="button">取消</button>
+                </div>
+                <progress id="receiver-file-transfer-progress" max="1" value="0"></progress>
               </div>
             </section>
           </div>

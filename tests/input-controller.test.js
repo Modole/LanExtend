@@ -32,3 +32,30 @@ test('clipboard synchronization sends changes and does not echo remote text', ()
   assert.equal(sent.length, 2);
   sync.stop();
 });
+
+test('text clipboard is resent after a file clipboard temporarily owns the pasteboard', () => {
+  let local = 'same text';
+  let containsFiles = false;
+  let writes = 0;
+  const sent = [];
+  const sync = new ClipboardSync({
+    readText: () => local,
+    writeText: (text) => { local = text; containsFiles = false; writes += 1; },
+    send: (message) => sent.push(message),
+    shouldSkip: () => containsFiles,
+    origin: 'file-transition',
+    intervalMs: 60_000
+  });
+  sync.start(true);
+  containsFiles = true;
+  assert.equal(sync.poll(), false);
+  containsFiles = false;
+  assert.equal(sync.poll(), true);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].text, 'same text');
+  containsFiles = true;
+  sync.applyRemote({ text: 'same text' });
+  assert.equal(containsFiles, false);
+  assert.equal(writes, 1);
+  sync.stop();
+});

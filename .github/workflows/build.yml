@@ -49,6 +49,13 @@ jobs:
           lipo "$display_helper" -verify_arch arm64 x86_64
           lipo "$input_helper" -verify_arch arm64 x86_64
 
+          set +e
+          probe_output="$("$input_helper" --probe)"
+          probe_status=$?
+          set -e
+          test "$probe_status" -eq 0 -o "$probe_status" -eq 2
+          printf '%s\n' "$probe_output" | grep -q '"event":"probe"'
+
           app_binary="$(find release -type f -path '*/LanExtend.app/Contents/MacOS/LanExtend' -print -quit)"
           test -n "$app_binary"
           lipo "$app_binary" -verify_arch arm64 x86_64
@@ -83,6 +90,22 @@ jobs:
 
       - name: Run source checks and unit tests
         run: npm test
+
+      - name: Verify Windows input and file clipboard helper
+        shell: pwsh
+        run: |
+          $lines = @(
+            '{"command":"clipboard-read","requestId":"ci-clipboard"}',
+            '{"command":"quit"}'
+          )
+          $output = $lines | & powershell.exe -NoLogo -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File native/windows/lanextend-input.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Windows helper exited with code $LASTEXITCODE" }
+          $messages = @($output | ForEach-Object { $_ | ConvertFrom-Json })
+          $ready = $messages | Where-Object { $_.event -eq 'ready' } | Select-Object -First 1
+          $response = $messages | Where-Object { $_.requestId -eq 'ci-clipboard' } | Select-Object -First 1
+          if (-not $ready.trusted) { throw 'Windows helper did not report ready' }
+          if (-not $response.ok) { throw "Clipboard probe failed: $($response.error)" }
+          if ($null -eq $response.revision) { throw 'Clipboard revision was not returned' }
 
       - name: Build unsigned Windows packages
         run: npm run dist:win

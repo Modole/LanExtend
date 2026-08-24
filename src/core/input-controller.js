@@ -1,6 +1,7 @@
 'use strict';
 
 const { EventEmitter } = require('node:events');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { InputLayoutRouter, findEntry, hasAdjacentEdge } = require('./input-layout');
@@ -40,11 +41,14 @@ class JsonLineProcess extends EventEmitter {
     this.options = options;
     this.child = null;
     this.buffer = '';
+    this.stderrBuffer = '';
     this.shutdownTimer = null;
+    this.pendingRequests = new Map();
   }
 
   async start(timeoutMs = 5000) {
     if (this.child) return;
+    this.stderrBuffer = '';
     const child = spawn(this.command, this.args, {
       cwd: this.options.cwd,
       windowsHide: true,
@@ -54,11 +58,17 @@ class JsonLineProcess extends EventEmitter {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => this.#consume(chunk));
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk) => this.emit('warning', String(chunk).trim()));
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk);
+      this.stderrBuffer = `${this.stderrBuffer}${text}`.slice(-4096);
+      const warning = text.trim();
+      if (warning) this.emit('warning', warning);
+    });
     child.on('error', (error) => this.emit('error', error));
     child.on('exit', (code, signal) => {
       clearTimeout(this.shutdownTimer);
       this.shutdownTimer = null;
+      this.#rejectPending(this.#exitError('输入助手已退出', code, signal));
       if (this.child === child) this.child = null;
       this.emit('exit', { code, signal });
     });
@@ -77,12 +87,18 @@ class JsonLineProcess extends EventEmitter {
         this.off('message', ready);
         reject(error);
       });
-      child.once('exit', (code) => {
+      child.once('exit', (code, signal) => {
         clearTimeout(timer);
         this.off('message', ready);
-        reject(new Error(`输入助手提前退出 (${code ?? 'unknown'})`));
+        reject(this.#exitError('输入助手提前退出', code, signal));
       });
     });
+  }
+
+  #exitError(prefix, code, signal) {
+    const marker = code ?? signal ?? 'unknown';
+    const detail = this.stderrBuffer.trim().replace(/\s+/g, ' ').slice(0, 600);
+    return new Error(`${prefix} (${marker})${detail ? `：${detail}` : ''}`);
   }
 
   #consume(chunk) {
@@ -93,7 +109,18 @@ class JsonLineProcess extends EventEmitter {
       this.buffer = this.buffer.slice(newline + 1);
       if (!line) continue;
       try {
-        this.emit('message', JSON.parse(line));
+        const message = JSON.parse(line);
+        const pending = typeof message?.requestId === 'string'
+          ? this.pendingRequests.get(message.requestId)
+          : null;
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingRequests.delete(message.requestId);
+          if (message.ok === false) pending.reject(new Error(message.error || '输入助手请求失败'));
+          else pending.resolve(message);
+          continue;
+        }
+        this.emit('message', message);
       } catch {
         this.emit('warning', `输入助手返回了无法识别的内容：${line.slice(0, 160)}`);
       }
@@ -104,6 +131,32 @@ class JsonLineProcess extends EventEmitter {
     if (!this.child?.stdin?.writable) return false;
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
     return true;
+  }
+
+  request(command, payload = {}, timeoutMs = 4000) {
+    if (!this.child?.stdin?.writable) return Promise.reject(new Error('输入助手尚未运行'));
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(`输入助手请求超时：${command}`));
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingRequests.set(requestId, { resolve, reject, timer });
+      if (!this.send({ command, requestId, ...payload })) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(requestId);
+        reject(new Error('无法写入输入助手'));
+      }
+    });
+  }
+
+  #rejectPending(error) {
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
   }
 
   stop() {
@@ -268,6 +321,20 @@ class MacInputController extends EventEmitter {
     this.emit('status', this.status());
   }
 
+  async readClipboardFiles() {
+    if (!this.process) return { paths: [], revision: null };
+    const response = await this.process.request('clipboard-read');
+    return {
+      paths: Array.isArray(response.paths) ? response.paths.filter((item) => typeof item === 'string') : [],
+      revision: Number.isFinite(response.revision) ? response.revision : null
+    };
+  }
+
+  async writeClipboardFiles(paths) {
+    if (!this.process) throw new Error('macOS 输入助手尚未运行');
+    return this.process.request('clipboard-write', { paths });
+  }
+
   stop() {
     if (this.active) this.#deactivate(this.router?.forceExit() || { x: 20, y: 20 });
     this.running = false;
@@ -299,7 +366,7 @@ class WindowsInputController extends EventEmitter {
     if (!this.supported) throw new Error('Windows 键鼠注入助手不可用');
     if (this.process) return { supported: true, running: true };
     const wrapper = new JsonLineProcess('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.script
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', this.script
     ]);
     this.process = wrapper;
     wrapper.on('warning', (message) => this.emit('warning', message));
@@ -323,6 +390,20 @@ class WindowsInputController extends EventEmitter {
     return this.process?.send({ command: 'input', event }) || false;
   }
 
+  async readClipboardFiles() {
+    if (!this.process) return { paths: [], revision: null };
+    const response = await this.process.request('clipboard-read');
+    return {
+      paths: Array.isArray(response.paths) ? response.paths.filter((item) => typeof item === 'string') : [],
+      revision: Number.isFinite(response.revision) ? response.revision : null
+    };
+  }
+
+  async writeClipboardFiles(paths) {
+    if (!this.process) throw new Error('Windows 输入助手尚未运行');
+    return this.process.request('clipboard-write', { paths });
+  }
+
   stop() {
     this.process?.send({ command: 'input', event: { kind: 'releaseAll' } });
     this.process?.stop();
@@ -339,7 +420,9 @@ class ClipboardSync extends EventEmitter {
     this.send = options.send;
     this.intervalMs = options.intervalMs || 500;
     this.origin = options.origin || `clipboard-${Date.now()}`;
+    this.shouldSkip = typeof options.shouldSkip === 'function' ? options.shouldSkip : () => false;
     this.lastText = '';
+    this.skippedForFiles = false;
     this.sequence = 0;
     this.timer = null;
   }
@@ -347,14 +430,22 @@ class ClipboardSync extends EventEmitter {
   start(sendInitial = true) {
     if (this.timer) return;
     this.lastText = String(this.readText() || '');
-    if (sendInitial && Buffer.byteLength(this.lastText, 'utf8') <= CLIPBOARD_MAX_BYTES) this.#send(this.lastText);
+    this.skippedForFiles = this.shouldSkip();
+    if (sendInitial && !this.skippedForFiles
+      && Buffer.byteLength(this.lastText, 'utf8') <= CLIPBOARD_MAX_BYTES) this.#send(this.lastText);
     this.timer = setInterval(() => this.poll(), this.intervalMs);
     this.timer.unref?.();
   }
 
   poll() {
+    if (this.shouldSkip()) {
+      this.skippedForFiles = true;
+      return false;
+    }
     const text = String(this.readText() || '');
-    if (text === this.lastText) return false;
+    const forceSend = this.skippedForFiles;
+    this.skippedForFiles = false;
+    if (!forceSend && text === this.lastText) return false;
     this.lastText = text;
     if (Buffer.byteLength(text, 'utf8') > CLIPBOARD_MAX_BYTES) {
       this.emit('warning', '剪贴板文本过大，本次未同步');
@@ -372,7 +463,10 @@ class ClipboardSync extends EventEmitter {
   applyRemote(message) {
     if (typeof message?.text !== 'string') return false;
     if (Buffer.byteLength(message.text, 'utf8') > CLIPBOARD_MAX_BYTES) return false;
-    if (message.text === this.lastText) return true;
+    const clipboardHasFiles = this.shouldSkip();
+    const forceWrite = this.skippedForFiles || clipboardHasFiles;
+    this.skippedForFiles = false;
+    if (!forceWrite && message.text === this.lastText) return true;
     this.lastText = message.text;
     this.writeText(message.text);
     return true;
