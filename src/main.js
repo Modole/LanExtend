@@ -461,7 +461,11 @@ async function startReceiverServices() {
     display: receiverDisplayInfo()
   };
   try {
-    signalServer = new SignalServer(receiver, { port: receiver.port });
+    fileTransferManager.useSharedPort(receiver.port);
+    signalServer = new SignalServer(receiver, {
+      port: receiver.port,
+      requestHandler: (request, response) => fileTransferManager.handleRequest(request, response)
+    });
     signalServer.on('connected', (connection) => {
       if (sleepBlockerId === null) sleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
       emitToRenderer('receiver:connected', connection);

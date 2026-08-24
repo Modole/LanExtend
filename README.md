@@ -43,9 +43,9 @@ macOS 虚拟显示依赖未公开的 `CGVirtualDisplay` CoreGraphics API。它�
 让 Mac 与 Windows 位于同一可信 IPv4 局域网。优先按应用程序为 LanExtend 放行“专用网络”，因为 WebRTC 还会协商动态 UDP 端口。固定控制端口方向为：
 
 - Windows 子端**出站** UDP `47771`：广播发现；Mac 主端需要能接收入站发现报文；
-- Windows 子端**入站** TCP `47772`：默认 WebSocket 信令端口，可在子端 GUI 修改；
+- Windows 子端**入站** TCP `47772`：默认 WebSocket 信令端口，也承载 Windows→Mac 文件流，可在子端 GUI 修改；
 - WebRTC 动态 UDP：双向媒体/连通性检查，由系统防火墙按 LanExtend 应用放行更合适。
-- 文件剪贴板动态 TCP：复制文件时由发送端临时监听随机高位端口，传完即释放；需按 LanExtend 应用允许两端专用网络入站。
+- Mac→Windows 文件流：Mac 复制文件时临时监听随机高位 TCP 端口，传完即释放；Mac 端需按 LanExtend 应用允许专用网络入站。
 
 不要把这些端口映射到公网。当前发现和信令没有认证，信令也没有 TLS。
 
@@ -110,7 +110,7 @@ flowchart LR
   subgraph R["Windows 子端"]
     GUIR["Electron GUI"] --> RTCR["WebRTC 接收端"]
     GUIR --> IW["Windows 输入 helper"]
-    GUIR --> FR["按需文件流服务"]
+    GUIR --> FR["文件流服务（复用信令端口）"]
     GUIR --> MEMR["本机 settings.json"]
     GUIR --> ADV["UDP 广播"]
     GUIR --> SIG["WebSocket 信令服务"]
@@ -119,7 +119,8 @@ flowchart LR
   GUIH -- "ws://子端:47772" --> SIG
   RTC1 -- "WebRTC 加密媒体（单路视频）" --> RTCR
   IH -- "WebSocket 键鼠 / 剪贴板" --> IW
-  FH <-. "动态 TCP 文件流（双向）" .-> FR
+  FR -. "Windows→Mac TCP/47772" .-> FH
+  FH -. "Mac→Windows 临时 TCP" .-> FR
 ```
 
 发现报文只用于定位子端；远端媒体不经过云服务。WebRTC 媒体本身使用其标准加密传输，但**设备身份、发现和 WebSocket 信令均未认证**，所以必须把整个二层/三层局域网视为信任边界。

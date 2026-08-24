@@ -2,6 +2,7 @@
 
 const dgram = require('node:dgram');
 const { EventEmitter } = require('node:events');
+const http = require('node:http');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { WebSocketServer } = require('ws');
@@ -166,35 +167,54 @@ class SignalServer extends EventEmitter {
     this.receiver = receiver;
     this.host = options.host || '0.0.0.0';
     this.port = options.port ?? receiver.port ?? SIGNAL_PORT;
+    this.requestHandler = typeof options.requestHandler === 'function' ? options.requestHandler : null;
+    this.httpServer = null;
     this.server = null;
     this.sessions = new Map();
   }
 
   async start() {
     if (this.server) return;
-    this.server = new WebSocketServer({
-      host: this.host,
-      port: this.port,
+    const httpServer = http.createServer((request, response) => {
+      this.#handleHttpRequest(request, response).catch((error) => {
+        this.emit('warning', error);
+        if (!response.headersSent) response.writeHead(500);
+        if (!response.writableEnded) response.end();
+      });
+    });
+    const webSocketServer = new WebSocketServer({
+      server: httpServer,
       maxPayload: MAX_SIGNAL_BYTES,
       perMessageDeflate: false
     });
-    this.server.on('connection', (socket, request) => this.#accept(socket, request));
-    this.server.on('error', (error) => this.emit('error', error));
+    this.httpServer = httpServer;
+    this.server = webSocketServer;
+    webSocketServer.on('connection', (socket, request) => this.#accept(socket, request));
+    webSocketServer.on('error', (error) => this.emit('error', error));
+    httpServer.on('error', (error) => this.emit('error', error));
     try {
       await new Promise((resolve, reject) => {
         const onError = (error) => reject(error);
-        this.server.once('error', onError);
-        this.server.once('listening', () => {
-          this.server.off('error', onError);
+        httpServer.once('error', onError);
+        httpServer.listen(this.port, this.host, () => {
+          httpServer.off('error', onError);
           resolve();
         });
       });
     } catch (error) {
-      const failedServer = this.server;
+      const failedWebSocketServer = this.server;
       this.server = null;
-      failedServer?.close();
+      this.httpServer = null;
+      failedWebSocketServer?.close();
+      httpServer.close();
       throw error;
     }
+  }
+
+  async #handleHttpRequest(request, response) {
+    const handled = this.requestHandler ? await this.requestHandler(request, response) : false;
+    if (!handled && !response.headersSent) response.writeHead(404);
+    if (!handled && !response.writableEnded) response.end();
   }
 
   #accept(socket, request) {
@@ -299,8 +319,11 @@ class SignalServer extends EventEmitter {
     for (const session of this.sessions.values()) session.socket.terminate();
     this.sessions.clear();
     const server = this.server;
+    const httpServer = this.httpServer;
     this.server = null;
+    this.httpServer = null;
     await new Promise((resolve) => server.close(resolve));
+    if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
   }
 }
 

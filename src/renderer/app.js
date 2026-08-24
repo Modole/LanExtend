@@ -2155,7 +2155,7 @@
       supported: Boolean(bootstrap.inputSharing?.supported)
     };
     setRoleVisibility(state.role);
-    setText('app-version', `扩展屏与键鼠共享 · ${bootstrap.appVersion || '0.4.1'}`);
+    setText('app-version', `扩展屏与键鼠共享 · ${bootstrap.appVersion || '0.4.2'}`);
     setText('protocol-chip', `协议 v${bootstrap.protocolVersion}`);
     bindUpdateUi();
 
