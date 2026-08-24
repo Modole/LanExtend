@@ -68,6 +68,32 @@ test('keyboard, mouse and clipboard messages are validated', () => {
   }))), /剪贴板/);
 });
 
+test('file clipboard offers and transfer status are validated', () => {
+  const transfer = {
+    id: '00000000-0000-4000-8000-000000000001',
+    port: 47773,
+    itemCount: 3,
+    totalBytes: 1024,
+    names: ['资料'],
+    expiresAt: Date.now() + 60_000
+  };
+  const offer = makeSignal('file-offer', { transfer });
+  assert.deepEqual(parseSignalMessage(JSON.stringify(offer)), offer);
+  const status = makeSignal('file-status', {
+    transferId: transfer.id,
+    status: 'completed',
+    bytes: 1024,
+    totalBytes: 1024
+  });
+  assert.deepEqual(parseSignalMessage(JSON.stringify(status)), status);
+  assert.throws(() => parseSignalMessage(JSON.stringify(makeSignal('file-offer', {
+    transfer: { ...transfer, names: ['../escape'] }
+  }))), /文件传输清单/);
+  assert.throws(() => parseSignalMessage(JSON.stringify(makeSignal('file-status', {
+    transferId: transfer.id, status: 'unknown'
+  }))), /文件传输状态/);
+});
+
 test('input sharing capabilities and receiver display are advertised', () => {
   const beacon = makeBeacon({
     id: 'receiver-input', name: 'Windows', port: 47772,
@@ -76,6 +102,7 @@ test('input sharing capabilities and receiver display are advertised', () => {
   const parsed = parseBeacon(Buffer.from(JSON.stringify(beacon)), '192.168.1.20');
   assert.ok(parsed.capabilities.includes('input'));
   assert.ok(parsed.capabilities.includes('clipboard'));
+  assert.ok(parsed.capabilities.includes('files'));
   assert.deepEqual(parsed.display, { width: 2560, height: 1440, scaleFactor: 1.5 });
 });
 

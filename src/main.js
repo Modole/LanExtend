@@ -18,9 +18,10 @@ const {
 } = require('electron');
 const { ConfigStore } = require('./core/config-store');
 const { PROTOCOL_VERSION } = require('./core/constants');
+const { FileClipboardSync, FileTransferManager } = require('./core/file-transfer');
 const { ClipboardSync, MacInputController, WindowsInputController } = require('./core/input-controller');
 const { DiscoveryAdvertiser, DiscoveryListener, SignalServer } = require('./core/network');
-const { isPrivateIPv4, isValidPort, makeSignal } = require('./core/protocol');
+const { isPrivateIPv4, isValidPort, makeSignal, truncateUtf8 } = require('./core/protocol');
 const {
   MAX_RELEASE_RESPONSE_BYTES,
   RELEASE_API_URL,
@@ -57,6 +58,9 @@ let lastScreenPermission = null;
 let hostInputController;
 let receiverInputController;
 let inputClipboard;
+let fileClipboard;
+let fileTransferManager;
+const activeFileReceives = new Map();
 let receiverInputSessionId = null;
 
 function emitToRenderer(channel, payload) {
@@ -127,18 +131,153 @@ function receiverDisplayInfo() {
 function stopClipboardSync() {
   inputClipboard?.stop();
   inputClipboard = null;
+  fileClipboard?.stop();
+  fileClipboard = null;
+  for (const transferId of activeFileReceives.keys()) fileTransferManager?.cancel(transferId);
+  activeFileReceives.clear();
 }
 
-function startClipboardSync(send, origin, sendInitial = true) {
+function clipboardContainsFiles() {
+  try {
+    return clipboard.availableFormats().some((format) => (
+      /(?:public\.file-url|NSFilenamesPboardType|FileNameW|FileName|CF_HDROP)/i.test(format)
+    ));
+  } catch {
+    return false;
+  }
+}
+
+async function startClipboardSync(
+  send,
+  origin,
+  sendInitial = true,
+  textEnabled = true,
+  fileEnabled = true
+) {
   stopClipboardSync();
-  inputClipboard = new ClipboardSync({
-    readText: () => clipboard.readText(),
-    writeText: (text) => clipboard.writeText(text),
-    send,
-    origin
+  const controller = role === 'host' ? hostInputController : receiverInputController;
+  if (fileEnabled && fileTransferManager && controller) {
+    fileClipboard = new FileClipboardSync({
+      readFiles: () => controller.readClipboardFiles(),
+      writeFiles: (paths) => controller.writeClipboardFiles(paths),
+      createOffer: (paths) => fileTransferManager.createOffer(paths),
+      send
+    });
+    fileClipboard.on('offer', (transfer) => emitToRenderer('input:file-transfer', {
+      transferId: transfer.id,
+      direction: 'send',
+      status: 'offered',
+      name: transfer.names.join('、'),
+      bytes: 0,
+      totalBytes: transfer.totalBytes
+    }));
+    fileClipboard.on('warning', (message) => emitToRenderer('input:warning', { message }));
+    await fileClipboard.start(sendInitial);
+  }
+  if (textEnabled) {
+    inputClipboard = new ClipboardSync({
+      readText: () => clipboard.readText(),
+      writeText: (text) => clipboard.writeText(text),
+      send,
+      origin,
+      shouldSkip: () => fileEnabled && clipboardContainsFiles()
+    });
+    inputClipboard.on('warning', (message) => emitToRenderer('input:warning', { message }));
+    inputClipboard.start(sendInitial);
+  }
+}
+
+function applyRemoteFileStatus(message) {
+  if (message.status === 'canceled' && activeFileReceives.has(message.transferId)) {
+    fileTransferManager?.cancel(message.transferId);
+    return;
+  }
+  if (message.status !== 'receiving') fileTransferManager?.release(message.transferId);
+  emitToRenderer('input:file-transfer', {
+    transferId: message.transferId,
+    direction: 'send',
+    status: message.status,
+    bytes: message.bytes || 0,
+    totalBytes: message.totalBytes || 0,
+    message: message.message || ''
   });
-  inputClipboard.on('warning', (message) => emitToRenderer('input:warning', { message }));
-  inputClipboard.start(sendInitial);
+}
+
+function sendCurrentInputPayload(payload) {
+  if (role === 'receiver') {
+    if (!receiverInputSessionId) return false;
+    return signalServer?.send(receiverInputSessionId, makeSignal(payload.type, payload)) || false;
+  }
+  emitToRenderer('input:outbound', payload);
+  return true;
+}
+
+function cancelFileTransfer(transferId) {
+  const id = String(transferId);
+  const receiving = activeFileReceives.has(id);
+  const canceled = fileTransferManager?.cancel(id) || false;
+  if (canceled && !receiving) {
+    sendCurrentInputPayload({ type: 'file-status', transferId: id, status: 'canceled' });
+  }
+  return canceled;
+}
+
+function receiveFileOffer(message, host, send) {
+  if (!fileClipboard || !fileTransferManager) throw new Error('文件剪贴板同步尚未启动');
+  const transfer = message.transfer;
+  send({
+    type: 'file-status',
+    transferId: transfer.id,
+    status: 'receiving',
+    bytes: 0,
+    totalBytes: transfer.totalBytes
+  });
+  const promise = fileTransferManager.receive(transfer, host)
+    .then(async (result) => {
+      if (!fileClipboard) throw new Error('文件剪贴板同步已停止');
+      await fileClipboard.applyRemote(result.paths);
+      send({
+        type: 'file-status',
+        transferId: transfer.id,
+        status: 'completed',
+        bytes: result.bytes,
+        totalBytes: transfer.totalBytes
+      });
+      emitToRenderer('input:file-transfer', {
+        transferId: transfer.id,
+        direction: 'receive',
+        status: 'completed',
+        name: transfer.names.join('、'),
+        bytes: result.bytes,
+        totalBytes: transfer.totalBytes,
+        paths: result.paths
+      });
+      return result;
+    })
+    .catch((error) => {
+      const canceled = error?.code === 'ABORT_ERR';
+      const errorMessage = truncateUtf8(String(error.message || error), 512);
+      send({
+        type: 'file-status',
+        transferId: transfer.id,
+        status: canceled ? 'canceled' : 'error',
+        bytes: 0,
+        totalBytes: transfer.totalBytes,
+        message: errorMessage
+      });
+      emitToRenderer('input:file-transfer', {
+        transferId: transfer.id,
+        direction: 'receive',
+        status: canceled ? 'canceled' : 'error',
+        name: transfer.names.join('、'),
+        bytes: 0,
+        totalBytes: transfer.totalBytes,
+        message: errorMessage
+      });
+    })
+    .finally(() => activeFileReceives.delete(transfer.id));
+  activeFileReceives.set(transfer.id, { promise, send });
+  return true;
 }
 
 async function checkReleasePageFallback(signal) {
@@ -318,7 +457,7 @@ async function stopReceiverServices() {
 async function startReceiverServices() {
   const receiver = {
     ...configStore.get().receiver,
-    capabilities: ['video', 'fullscreen', 'input', 'clipboard'],
+    capabilities: ['video', 'fullscreen', 'input', 'clipboard', 'files'],
     display: receiverDisplayInfo()
   };
   try {
@@ -386,23 +525,32 @@ async function startReceiverServices() {
 }
 
 async function handleReceiverInputMessage(event) {
-  const { sessionId, message } = event;
+  const { sessionId, remoteAddress, message } = event;
   if (message.type === 'control' && message.action === 'share-start') {
     await receiverInputController.start();
     receiverInputSessionId = sessionId;
     const display = receiverDisplayInfo();
     signalServer.send(sessionId, makeSignal('control', {
-      action: 'share-ready', clipboard: Boolean(message.clipboard), screen: display
+      action: 'share-ready',
+      clipboard: Boolean(message.clipboard),
+      files: Boolean(message.files),
+      screen: display
     }));
-    if (message.clipboard) {
-      startClipboardSync(
+    if (message.clipboard || message.files) {
+      await startClipboardSync(
         (payload) => signalServer?.send(sessionId, makeSignal(payload.type, payload)),
         `windows-${configStore.get().receiver.id}`,
-        false
+        false,
+        Boolean(message.clipboard),
+        Boolean(message.files)
       );
     } else stopClipboardSync();
     emitToRenderer('input:receiver-status', {
-      running: true, active: false, clipboard: Boolean(message.clipboard), screen: display
+      running: true,
+      active: false,
+      clipboard: Boolean(message.clipboard),
+      files: Boolean(message.files),
+      screen: display
     });
     return;
   }
@@ -415,7 +563,10 @@ async function handleReceiverInputMessage(event) {
   }
   if (message.type === 'control' && (message.action === 'active' || message.action === 'inactive')) {
     emitToRenderer('input:receiver-status', {
-      running: true, active: message.action === 'active', clipboard: Boolean(inputClipboard)
+      running: true,
+      active: message.action === 'active',
+      clipboard: Boolean(inputClipboard),
+      files: Boolean(fileClipboard)
     });
     return;
   }
@@ -425,6 +576,20 @@ async function handleReceiverInputMessage(event) {
   }
   if (message.type === 'clipboard') {
     if (sessionId === receiverInputSessionId) inputClipboard?.applyRemote(message);
+    return;
+  }
+  if (message.type === 'file-offer') {
+    if (sessionId === receiverInputSessionId) {
+      receiveFileOffer(
+        message,
+        remoteAddress,
+        (payload) => signalServer?.send(sessionId, makeSignal(payload.type, payload))
+      );
+    }
+    return;
+  }
+  if (message.type === 'file-status') {
+    if (sessionId === receiverInputSessionId) applyRemoteFileStatus(message);
     return;
   }
   emitToRenderer('receiver:signal', event);
@@ -549,13 +714,16 @@ function registerIpc() {
     return signalServer?.disconnect(String(sessionId), reason) || false;
   });
 
-  ipcMain.handle('input:host-start', async (_event, layout, clipboardEnabled) => {
+  ipcMain.handle('input:host-start', async (_event, layout, clipboardEnabled, fileClipboardEnabled) => {
     if (role !== 'host') throw new Error('只有 Mac 主端可以捕获本机键鼠');
     await hostInputController.start(layout);
-    if (clipboardEnabled) {
-      startClipboardSync(
+    if (clipboardEnabled || fileClipboardEnabled) {
+      await startClipboardSync(
         (payload) => emitToRenderer('input:outbound', payload),
-        `mac-${configStore.get().receiver.id}`
+        `mac-${configStore.get().receiver.id}`,
+        true,
+        Boolean(clipboardEnabled),
+        Boolean(fileClipboardEnabled)
       );
     } else stopClipboardSync();
     return hostInputController.status();
@@ -566,6 +734,21 @@ function registerIpc() {
     return hostInputController?.status() || { supported: false, running: false, active: false };
   });
   ipcMain.handle('input:apply-clipboard', (_event, message) => inputClipboard?.applyRemote(message) || false);
+  ipcMain.handle('input:receive-file-offer', (_event, message, host) => {
+    if (role !== 'host') return false;
+    return receiveFileOffer(
+      message,
+      String(host),
+      (payload) => emitToRenderer('input:outbound', payload)
+    );
+  });
+  ipcMain.handle('input:apply-file-status', (_event, message) => {
+    applyRemoteFileStatus(message);
+    return true;
+  });
+  ipcMain.handle('input:cancel-file-transfer', (_event, transferId) => (
+    cancelFileTransfer(transferId)
+  ));
   ipcMain.handle('input:get-status', () => ({
     supported: role === 'host' ? hostInputController.supported : receiverInputController.supported,
     accessibility: role === 'host' ? accessibilityPermissionStatus(false) : true,
@@ -606,6 +789,7 @@ async function cleanup() {
   discoveryListener?.stop();
   await stopReceiverServices();
   await virtualDisplay?.destroy();
+  await fileTransferManager?.stop();
 }
 
 if (!allowMultipleInstances && !app.requestSingleInstanceLock()) {
@@ -621,6 +805,15 @@ if (!allowMultipleInstances && !app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     app.setAppUserModelId('dev.lanextend.desktop');
     configStore = new ConfigStore(app.getPath('userData'));
+    fileTransferManager = new FileTransferManager({
+      cacheDirectory: path.join(app.getPath('userData'), 'clipboard-files')
+    });
+    fileTransferManager.on('progress', (event) => emitToRenderer('input:file-transfer', event));
+    fileTransferManager.on('warning', (error) => {
+      if (process.env.LANEXTEND_DEBUG) console.warn('[file-transfer]', error.message);
+    });
+    fileTransferManager.on('error', (error) => emitToRenderer('input:warning', { message: error.message }));
+    await fileTransferManager.cleanupCache();
     virtualDisplay = new VirtualDisplayManager({
       executable: helperPath({
         isPackaged: app.isPackaged,

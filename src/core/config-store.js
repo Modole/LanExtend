@@ -88,6 +88,9 @@ function sanitizeInputSharing(input = {}, previous = DEFAULTS.inputSharing) {
       ? input.lastDeviceId.slice(0, 128)
       : input.lastDeviceId === null ? null : previous.lastDeviceId,
     clipboard: typeof input.clipboard === 'boolean' ? input.clipboard : previous.clipboard,
+    fileClipboard: typeof input.fileClipboard === 'boolean'
+      ? input.fileClipboard
+      : previous.fileClipboard,
     autoReconnect: typeof input.autoReconnect === 'boolean'
       ? input.autoReconnect
       : previous.autoReconnect,

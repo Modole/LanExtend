@@ -46,6 +46,7 @@ test('signal server welcomes one host and forwards validated messages', async (t
   socket.send(JSON.stringify(makeSignal('hello', { hostId: 'mac-1', name: 'Mac' })));
   const event = await received;
   assert.equal(event.message.type, 'hello');
+  assert.equal(event.remoteAddress, '127.0.0.1');
 
   const response = once(socket, 'message');
   assert.equal(server.send(event.sessionId, makeSignal('pong', { timestamp: 123 })), true);

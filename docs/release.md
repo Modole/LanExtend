@@ -5,7 +5,7 @@
 `.github/workflows/build.yml` 生成的是**开发/验收 artifacts**；维护者在同一提交的两个平台 job 通过后，可另行创建面向用户的 GitHub Release：
 
 - macOS job：测试、构建含 `arm64`/`x86_64` 的 universal2 私有 API helper，并以 `--universal` 打包 DMG/ZIP；
-- Windows job：测试，打包 portable EXE/ZIP；
+- Windows job：测试、在 STA PowerShell 中探测输入/文件剪贴板 helper，再打包 portable EXE/ZIP；
 - 两端均未配置正式代码签名；Mac 未公证；
 - workflow 不自动创建 GitHub Release、不上传商店，也不执行静默更新。
 
@@ -124,7 +124,7 @@ npm run dist:win
 
 建议直接使用以下摘要，不要删减为模糊营销文案：
 
-> LanExtend 当前支持 macOS 14+ 主端到 Windows 10/11 64 位子端的一主一子视频扩展屏，以及独立的键鼠/纯文本剪贴板共享。仅用于可信 IPv4 局域网；当前无设备认证，禁止公网暴露。MVP 不支持音频、触控、文件剪贴板、HDR、多子端、IPv6 或跨网中继。macOS 虚拟显示依赖 Apple 未公开 API，系统更新可能导致失效，不支持 Mac App Store。
+> LanExtend 当前支持 macOS 14+ 主端到 Windows 10/11 64 位子端的一主一子视频扩展屏，以及独立的键鼠、纯文本和文件/文件夹剪贴板共享。文件单次最多 10000 条目、20 GiB，接收缓存默认保留 7 天。仅用于可信 IPv4 局域网；当前无设备认证，禁止公网暴露。MVP 不支持音频、触控、图片/富文本剪贴板、HDR、多子端、IPv6 或跨网中继。macOS 虚拟显示依赖 Apple 未公开 API，系统更新可能导致失效，不支持 Mac App Store。
 
 另外列出本次真实测试的 OS build、CPU 架构、网络和已知问题。未测平台必须写“未测”，不能仅写“理论支持”。
 

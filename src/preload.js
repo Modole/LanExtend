@@ -31,12 +31,15 @@ contextBridge.exposeInMainWorld('lanextend', Object.freeze({
   disconnectReceiver: (sessionId, reason) => ipcRenderer.invoke(
     'receiver:disconnect', sessionId, reason
   ),
-  startInputSharing: (layout, clipboardEnabled) => ipcRenderer.invoke(
-    'input:host-start', layout, clipboardEnabled
+  startInputSharing: (layout, clipboardEnabled, fileClipboardEnabled) => ipcRenderer.invoke(
+    'input:host-start', layout, clipboardEnabled, fileClipboardEnabled
   ),
   stopInputSharing: () => ipcRenderer.invoke('input:host-stop'),
   getInputStatus: () => ipcRenderer.invoke('input:get-status'),
   applyRemoteClipboard: (message) => ipcRenderer.invoke('input:apply-clipboard', message),
+  receiveFileOffer: (message, host) => ipcRenderer.invoke('input:receive-file-offer', message, host),
+  applyFileStatus: (message) => ipcRenderer.invoke('input:apply-file-status', message),
+  cancelFileTransfer: (transferId) => ipcRenderer.invoke('input:cancel-file-transfer', transferId),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
   setFullscreen: (enabled) => ipcRenderer.invoke('window:set-fullscreen', enabled),
   getScreenPermission: () => ipcRenderer.invoke('permission:get-screen-status'),
@@ -55,5 +58,6 @@ contextBridge.exposeInMainWorld('lanextend', Object.freeze({
   onInputHostStatus: (callback) => subscribe('input:host-status', callback),
   onInputReceiverStatus: (callback) => subscribe('input:receiver-status', callback),
   onInputWarning: (callback) => subscribe('input:warning', callback),
+  onFileTransfer: (callback) => subscribe('input:file-transfer', callback),
   onServiceError: (callback) => subscribe('service:error', callback)
 }));

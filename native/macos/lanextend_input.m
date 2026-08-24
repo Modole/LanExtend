@@ -20,6 +20,26 @@ static void WriteLine(NSString *line) {
   pthread_mutex_unlock(&gOutputLock);
 }
 
+static void WriteObject(NSDictionary *object) {
+  NSError *error = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
+  if (data == nil) return;
+  NSString *line = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  if (line != nil) WriteLine(line);
+}
+
+static void WriteResponse(NSString *requestId, bool ok, NSDictionary *payload, NSString *error) {
+  if (requestId.length == 0) return;
+  NSMutableDictionary *response = [@{
+    @"event": @"response",
+    @"requestId": requestId,
+    @"ok": @(ok)
+  } mutableCopy];
+  if (payload != nil) [response addEntriesFromDictionary:payload];
+  if (error.length > 0) response[@"error"] = error;
+  WriteObject(response);
+}
+
 static void WriteReady(bool trusted) {
   WriteLine([NSString stringWithFormat:@"{\"event\":\"ready\",\"trusted\":%@}", trusted ? @"true" : @"false"]);
 }
@@ -119,6 +139,45 @@ static CGEventRef EventCallback(CGEventTapProxy proxy, CGEventType type, CGEvent
 
 static void HandleCommand(NSDictionary *command) {
   NSString *name = [command[@"command"] isKindOfClass:NSString.class] ? command[@"command"] : @"";
+  NSString *requestId = [command[@"requestId"] isKindOfClass:NSString.class] ? command[@"requestId"] : @"";
+  if ([name isEqualToString:@"clipboard-read"]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+      NSDictionary *options = @{NSPasteboardURLReadingFileURLsOnlyKey: @YES};
+      NSArray<NSURL *> *urls = [pasteboard readObjectsForClasses:@[NSURL.class] options:options] ?: @[];
+      NSMutableArray<NSString *> *paths = [NSMutableArray array];
+      for (NSURL *url in urls) {
+        if (url.isFileURL && url.path.length > 0) [paths addObject:url.path];
+      }
+      WriteResponse(requestId, true, @{
+        @"paths": paths,
+        @"revision": @(pasteboard.changeCount)
+      }, nil);
+    });
+    return;
+  }
+  if ([name isEqualToString:@"clipboard-write"]) {
+    NSArray *values = [command[@"paths"] isKindOfClass:NSArray.class] ? command[@"paths"] : @[];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+      for (id value in values) {
+        if (![value isKindOfClass:NSString.class] || [value length] == 0) continue;
+        NSURL *url = [NSURL fileURLWithPath:value];
+        if (url != nil) [urls addObject:url];
+      }
+      if (urls.count == 0) {
+        WriteResponse(requestId, false, nil, @"没有可写入剪贴板的文件");
+        return;
+      }
+      NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+      [pasteboard clearContents];
+      bool written = [pasteboard writeObjects:urls];
+      WriteResponse(requestId, written, written ? @{
+        @"revision": @(pasteboard.changeCount)
+      } : nil, written ? nil : @"macOS 文件剪贴板写入失败");
+    });
+    return;
+  }
   if ([name isEqualToString:@"activate"]) {
     atomic_store(&gActive, true);
     return;
@@ -161,8 +220,15 @@ static void StartCommandReader(void) {
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
     bool probe = argc > 1 && strcmp(argv[1], "--probe") == 0;
-    NSDictionary *trustOptions = probe ? @{} : @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-    bool trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)trustOptions);
+    bool trusted = false;
+    if (probe) {
+      // macOS 26 can crash inside AXIsProcessTrustedWithOptions when it receives
+      // an empty options dictionary. The plain API is the correct no-prompt probe.
+      trusted = AXIsProcessTrusted();
+    } else {
+      NSDictionary *trustOptions = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+      trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)trustOptions);
+    }
     if (probe) {
       WriteLine([NSString stringWithFormat:@"{\"event\":\"probe\",\"trusted\":%@}", trusted ? @"true" : @"false"]);
       return trusted ? 0 : 2;

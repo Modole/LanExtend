@@ -1,6 +1,6 @@
-# LanExtend 协议 v2
+# LanExtend 协议 v3
 
-本文描述仓库当前 `PROTOCOL_VERSION = 2` 的线协议。v2 在原有扩展屏信令上加入键鼠控制和剪贴板消息，不与 v1 混用。
+本文描述仓库当前 `PROTOCOL_VERSION = 3` 的线协议。v3 在扩展屏、键鼠和文本剪贴板信令上加入双向文件/文件夹剪贴板，不与 v1/v2 混用。
 
 ## 1. 端口和传输
 
@@ -9,12 +9,13 @@
 | 子端发现 | Windows 子端 → IPv4 广播 | UDP `47771` | 单个 UTF-8 JSON 对象 | 解析上限 4 KiB |
 | WebRTC 信令 | Mac 主端 → Windows 子端 | TCP `47772` | 明文 WebSocket `ws://`、UTF-8 JSON | 单消息 256 KiB |
 | 视频 | Mac 主端 → Windows 子端 | 动态 | WebRTC ICE/DTLS-SRTP | 由 WebRTC 决定 |
+| 文件剪贴板 | 当前复制端 → 另一端 | 动态高位 TCP | 按需 HTTP 二进制流 | 10000 条目、20 GiB |
 
-当前没有 HTTP API、云服务、STUN 或 TURN。信令端口可以在子端设置中修改，发现端口是固定协议常量。
+文件复制时，发送端按需在 `0.0.0.0:0` 启动一次临时 HTTP 文件流服务，并在 `file-offer` 中公布实际端口；它不是通用管理 API。当前没有云服务、STUN 或 TURN。信令端口可以在子端设置中修改，发现端口是固定协议常量。
 
 ## 2. 通用规则
 
-- 除 `welcome` 外，信令消息都包含整数 `protocol: 2` 和受支持的 `type`。
+- 除 `welcome` 外，信令消息都包含整数 `protocol: 3` 和受支持的 `type`。
 - 接收方严格要求协议版本相等，不进行版本协商。
 - JSON 顶层必须是普通对象，不能是数组、标量或带特殊原型的内部对象。
 - 名称去除控制字符、前后空白，并截断到 64 个字符。
@@ -29,12 +30,12 @@ Windows 子端启动后立即广播，之后默认每 1500 ms 向 `255.255.255.2
 ```json
 {
   "type": "lanextend.receiver",
-  "protocol": 2,
+  "protocol": 3,
   "id": "5dd9a8d2-f997-4f85-b1e5-f086d1164441",
   "name": "会议室 Windows",
   "port": 47772,
   "platform": "win32",
-  "capabilities": ["video", "fullscreen", "input", "clipboard"],
+  "capabilities": ["video", "fullscreen", "input", "clipboard", "files"],
   "display": { "width": 1920, "height": 1080, "scaleFactor": 1 }
 }
 ```
@@ -44,7 +45,7 @@ Windows 子端启动后立即广播，之后默认每 1500 ms 向 `255.255.255.2
 | 字段 | 要求 |
 | --- | --- |
 | `type` | 必须等于 `lanextend.receiver` |
-| `protocol` | 必须等于 `2` |
+| `protocol` | 必须等于 `3` |
 | `id` | 非空字符串，最长 128；正常实现首次运行生成 UUID 并持久化 |
 | `name` | 非空字符串，最长 64 |
 | `port` | 整数 `1–65535` |
@@ -63,12 +64,12 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "welcome",
-  "protocol": 2,
+  "protocol": 3,
   "receiver": {
     "id": "5dd9a8d2-f997-4f85-b1e5-f086d1164441",
     "name": "会议室 Windows",
     "port": 47772,
-    "capabilities": ["video", "fullscreen", "input", "clipboard"],
+    "capabilities": ["video", "fullscreen", "input", "clipboard", "files"],
     "display": { "width": 1920, "height": 1080, "scaleFactor": 1 }
   }
 }
@@ -81,7 +82,7 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "hello",
-  "protocol": 2,
+  "protocol": 3,
   "hostId": "mac-host-id",
   "name": "设计部 Mac"
 }
@@ -98,7 +99,7 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "offer",
-  "protocol": 2,
+  "protocol": 3,
   "sdp": {
     "type": "offer",
     "sdp": "v=0\r\n..."
@@ -117,7 +118,7 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "ice",
-  "protocol": 2,
+  "protocol": 3,
   "candidate": {
     "candidate": "candidate:...",
     "sdpMid": "0",
@@ -133,7 +134,7 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 用于应用层存活探测，时间戳必须是非负有限数。主端默认每 5 秒发送一次：
 
 ```json
-{"type":"ping","protocol":2,"timestamp":1786320000000}
+{"type":"ping","protocol":3,"timestamp":1786320000000}
 ```
 
 接收 `ping` 的一端使用相同时间戳回复 `pong`，主端据此展示应用层 RTT。连续约 15 秒没有 `pong` 时，主端把会话视为失联。它不是时钟同步，也不能证明对端身份。
@@ -143,7 +144,7 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "disconnect",
-  "protocol": 2,
+  "protocol": 3,
   "reason": "主端主动断开"
 }
 ```
@@ -157,9 +158,10 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 ```json
 {
   "type": "control",
-  "protocol": 2,
+  "protocol": 3,
   "action": "share-start",
   "clipboard": true,
+  "files": true,
   "screen": { "width": 1920, "height": 1080 }
 }
 ```
@@ -169,9 +171,9 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 鼠标、按键和释放事件使用 `input`：
 
 ```json
-{"type":"input","protocol":2,"event":{"kind":"pointer","x":960,"y":540}}
-{"type":"input","protocol":2,"event":{"kind":"key","vk":65,"down":true}}
-{"type":"input","protocol":2,"event":{"kind":"releaseAll"}}
+{"type":"input","protocol":3,"event":{"kind":"pointer","x":960,"y":540}}
+{"type":"input","protocol":3,"event":{"kind":"key","vk":65,"down":true}}
+{"type":"input","protocol":3,"event":{"kind":"releaseAll"}}
 ```
 
 支持的 `kind` 为 `pointer/button/wheel/key/releaseAll`。坐标是 Windows 主显示器内的逻辑像素；键盘使用 Windows virtual-key code。鼠标移动在 Mac 端合并为约 8 ms 一批，按键、点击或滚轮前会先刷新待发送位置。
@@ -179,10 +181,41 @@ Mac 端把 UDP 数据报的来源地址作为设备 `host`，不会采用报文�
 纯文本剪贴板双向发送：
 
 ```json
-{"type":"clipboard","protocol":2,"text":"同步文本","revision":"mac-id:12"}
+{"type":"clipboard","protocol":3,"text":"同步文本","revision":"mac-id:12"}
 ```
 
-文本 UTF-8 上限为 128 KiB；`revision` 用于观测，实际回环抑制以本地最近内容为准。不支持文件、图片和富文本。
+文本 UTF-8 上限为 128 KiB；`revision` 用于观测，实际回环抑制以本地最近内容为准。图片和富文本仍不支持。
+
+文件/文件夹剪贴板使用控制信令和独立二进制流。复制端先发送：
+
+```json
+{
+  "type": "file-offer",
+  "protocol": 3,
+  "transfer": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "port": 53142,
+    "itemCount": 7,
+    "totalBytes": 1048576,
+    "names": ["设计稿", "说明.txt"],
+    "expiresAt": 1786320900000,
+    "warnings": []
+  }
+}
+```
+
+接收端只使用 WebSocket 连接所对应的私有 IPv4 作为文件源地址，不接受清单自报 host。`id` 为 UUID，`port` 为 `1–65535`；条目最多 10000、总文件内容最多 20 GiB、顶层名称最多 16 个。offer 默认 15 分钟过期，符号链接和特殊文件被跳过并可出现在 `warnings`。
+
+接收端请求 `GET /v1/transfers/<id>/stream`。响应以 ASCII 魔数 `LEXFILE1` 开始，随后重复：4 字节大端 JSON 头长度、UTF-8 JSON 头 `{path,type,size,mtimeMs}`、文件内容（目录没有内容）、文件内容的 32 字节 SHA-256。长度为 0 的 4 字节头表示结束。路径必须是 `/` 分隔的安全相对路径；接收端拒绝路径穿越、重复路径、条目/字节/顶层名称与 offer 不一致或摘要错误。
+
+接收进度和最终结果通过 WebSocket 返回：
+
+```json
+{"type":"file-status","protocol":3,"transferId":"550e8400-e29b-41d4-a716-446655440000","status":"receiving","bytes":524288,"totalBytes":1048576}
+{"type":"file-status","protocol":3,"transferId":"550e8400-e29b-41d4-a716-446655440000","status":"completed","bytes":1048576,"totalBytes":1048576}
+```
+
+`status` 为 `receiving/completed/canceled/error`。接收端先写入 `<userData>/clipboard-files/<id>.partial`，全部校验成功后原子改名，再把顶层路径写入系统文件剪贴板；失败和取消会删除 `.partial`。已完成缓存默认保留 7 天，应用启动时清理。
 
 ## 7. 标准时序
 
@@ -191,9 +224,9 @@ sequenceDiagram
   participant M as Mac 主端
   participant W as Windows 子端
   M->>W: 用户选择设备并点“扩展”，WebSocket connect
-  W-->>M: welcome(protocol=2)
+  W-->>M: welcome(protocol=3)
   M->>M: 核对子端真实 UUID并更新记忆
-  M->>W: hello(protocol=2)
+  M->>W: hello(protocol=3)
   M->>M: 自动创建/定位虚拟显示捕获源
   M->>W: offer(SDP)
   W-->>M: answer(SDP)
@@ -241,7 +274,7 @@ sequenceDiagram
 | 授权 | 仅“主端主动连接 + 子端单会话”的流程限制 |
 | DoS 缓解 | 消息大小、字段校验和单会话限制；不构成完整防护 |
 
-因此协议 v2 只适用于用户自己的受控局域网。当前产品选择不实现账号、配对或 TLS；如果未来扩大到共享网络，应另行提升协议并设计设备身份和加密。
+因此协议 v3 只适用于用户自己的受控局域网。文件流和 WebSocket 信令均没有 TLS/设备认证；当前产品选择不实现账号或配对，如果未来扩大到共享网络，应另行提升协议并设计设备身份和加密。
 
 ## 10. 兼容性变更规则
 
@@ -252,4 +285,4 @@ sequenceDiagram
 - 增加必须被旧端理解的消息；
 - 改变端口/发现模型且没有兼容回退。
 
-仅增加可忽略的 GUI 元数据也应先确认当前解析器是否会保留；v2 解析器只验证已知关键字段，不提供通用扩展协商。
+仅增加可忽略的 GUI 元数据也应先确认当前解析器是否会保留；v3 解析器只验证已知关键字段，不提供通用扩展协商。

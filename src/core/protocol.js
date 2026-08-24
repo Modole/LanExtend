@@ -1,7 +1,13 @@
 'use strict';
 
 const net = require('node:net');
-const { MAX_BEACON_BYTES, MAX_SIGNAL_BYTES, PROTOCOL_VERSION } = require('./constants');
+const {
+  MAX_BEACON_BYTES,
+  MAX_FILE_ENTRIES,
+  MAX_FILE_TRANSFER_BYTES,
+  MAX_SIGNAL_BYTES,
+  PROTOCOL_VERSION
+} = require('./constants');
 
 const MAX_DISCONNECT_REASON_BYTES = 120;
 
@@ -15,7 +21,9 @@ const SIGNAL_TYPES = new Set([
   'pong',
   'control',
   'input',
-  'clipboard'
+  'clipboard',
+  'file-offer',
+  'file-status'
 ]);
 
 const CONTROL_ACTIONS = new Set([
@@ -39,6 +47,14 @@ function isPlainObject(value) {
 
 function isNonEmptyString(value, max = 256) {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
+}
+
+function isPortableFileName(value) {
+  return isNonEmptyString(value, 180)
+    && value !== '.' && value !== '..'
+    && !/[\u0000-\u001f<>:"/\\|?*]/.test(value)
+    && !/[. ]$/.test(value)
+    && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value);
 }
 
 function isValidPort(value) {
@@ -118,6 +134,9 @@ function parseSignalMessage(raw) {
     if (message.clipboard !== undefined && typeof message.clipboard !== 'boolean') {
       throw new Error('控制消息的剪贴板设置无效');
     }
+    if (message.files !== undefined && typeof message.files !== 'boolean') {
+      throw new Error('控制消息的文件剪贴板设置无效');
+    }
     if (message.screen !== undefined) {
       if (!isPlainObject(message.screen)
         || !Number.isInteger(message.screen.width)
@@ -164,6 +183,43 @@ function parseSignalMessage(raw) {
     }
   }
 
+  if (message.type === 'file-offer') {
+    const transfer = message.transfer;
+    if (!isPlainObject(transfer)
+      || !isNonEmptyString(transfer.id, 64)
+      || !/^[0-9a-f-]{36}$/.test(transfer.id)
+      || !isValidPort(transfer.port)
+      || !Number.isInteger(transfer.itemCount)
+      || transfer.itemCount < 1 || transfer.itemCount > MAX_FILE_ENTRIES
+      || !Number.isSafeInteger(transfer.totalBytes)
+      || transfer.totalBytes < 0 || transfer.totalBytes > MAX_FILE_TRANSFER_BYTES
+      || !Array.isArray(transfer.names) || transfer.names.length < 1 || transfer.names.length > 16
+      || transfer.names.some((name) => !isPortableFileName(name))
+      || !Number.isSafeInteger(transfer.expiresAt) || transfer.expiresAt < 0) {
+      throw new Error('文件传输清单无效');
+    }
+    if (transfer.warnings !== undefined
+      && (!Array.isArray(transfer.warnings)
+        || transfer.warnings.length > 8
+        || transfer.warnings.some((warning) => !isNonEmptyString(warning, 240)))) {
+      throw new Error('文件传输提示无效');
+    }
+  }
+
+  if (message.type === 'file-status') {
+    if (!isNonEmptyString(message.transferId, 64)
+      || !/^[0-9a-f-]{36}$/.test(message.transferId)
+      || !['receiving', 'completed', 'canceled', 'error'].includes(message.status)
+      || (message.bytes !== undefined
+        && (!Number.isSafeInteger(message.bytes) || message.bytes < 0 || message.bytes > MAX_FILE_TRANSFER_BYTES))
+      || (message.totalBytes !== undefined
+        && (!Number.isSafeInteger(message.totalBytes)
+          || message.totalBytes < 0 || message.totalBytes > MAX_FILE_TRANSFER_BYTES))
+      || (message.message !== undefined && !isNonEmptyString(message.message, 512))) {
+      throw new Error('文件传输状态无效');
+    }
+  }
+
   return message;
 }
 
@@ -194,7 +250,7 @@ function makeBeacon(receiver) {
     port: receiver.port,
     platform: 'win32',
     authMode: 'none',
-    capabilities: ['video', 'fullscreen', 'input', 'clipboard'],
+    capabilities: ['video', 'fullscreen', 'input', 'clipboard', 'files'],
     display: receiver.display
   };
 }

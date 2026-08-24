@@ -231,7 +231,7 @@ class SignalServer extends EventEmitter {
         name: this.receiver.name,
         port: this.port,
         authMode: 'none',
-        capabilities: this.receiver.capabilities || ['video', 'fullscreen', 'input', 'clipboard'],
+        capabilities: this.receiver.capabilities || ['video', 'fullscreen', 'input', 'clipboard', 'files'],
         display: this.receiver.display || null
       },
       transportSecurity: 'none'
@@ -265,7 +265,7 @@ class SignalServer extends EventEmitter {
           return;
         }
         refreshActivityTimeout(20_000);
-        this.emit('message', { sessionId: id, message });
+        this.emit('message', { sessionId: id, remoteAddress, message });
       } catch (error) {
         this.emit('warning', error);
         socket.close(1008, '信令格式无效');
