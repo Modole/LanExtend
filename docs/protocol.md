@@ -7,11 +7,11 @@
 | 用途 | 方向 | 默认端口 | 传输 | 上限 |
 | --- | --- | --- | --- | --- |
 | 子端发现 | Windows 子端 → IPv4 广播 | UDP `47771` | 单个 UTF-8 JSON 对象 | 解析上限 4 KiB |
-| WebRTC 信令 | Mac 主端 → Windows 子端 | TCP `47772` | 明文 WebSocket `ws://`、UTF-8 JSON | 单消息 256 KiB |
+| WebRTC 信令及 Windows 文件源 | Mac 主端 → Windows 子端 | TCP `47772` | 明文 WebSocket `ws://`、UTF-8 JSON；按需 HTTP 文件流 | 信令单消息 256 KiB；文件 10000 条目、20 GiB |
 | 视频 | Mac 主端 → Windows 子端 | 动态 | WebRTC ICE/DTLS-SRTP | 由 WebRTC 决定 |
-| 文件剪贴板 | 当前复制端 → 另一端 | 动态高位 TCP | 按需 HTTP 二进制流 | 10000 条目、20 GiB |
+| Mac 文件源 | Windows 子端 → Mac 主端 | 动态高位 TCP | 按需 HTTP 二进制流 | 10000 条目、20 GiB |
 
-文件复制时，发送端按需在 `0.0.0.0:0` 启动一次临时 HTTP 文件流服务，并在 `file-offer` 中公布实际端口；它不是通用管理 API。当前没有云服务、STUN 或 TURN。信令端口可以在子端设置中修改，发现端口是固定协议常量。
+Windows 复制文件时，HTTP 文件流复用子端已经监听的信令 TCP 端口，避免 Windows 防火墙拦截额外随机端口；WebSocket upgrade 与 `/v1/transfers/<UUID>/stream` 在同一监听器上分流。Mac 复制文件时仍按需在 `0.0.0.0:0` 启动临时文件流服务，并在 `file-offer` 中公布实际端口。文件端点不是通用管理 API。当前没有云服务、STUN 或 TURN。信令端口可以在子端设置中修改，发现端口是固定协议常量。
 
 ## 2. 通用规则
 

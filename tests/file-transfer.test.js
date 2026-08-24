@@ -4,8 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { WebSocket } = require('ws');
 const {
   FileClipboardSync,
   FileTransferClient,
@@ -15,6 +17,16 @@ const {
   portableSegment,
   safeDestination
 } = require('../src/core/file-transfer');
+const { SignalServer } = require('../src/core/network');
+const { makeSignal } = require('../src/core/protocol');
+
+async function unusedPort() {
+  const server = net.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
 
 async function fixture(t) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'lanextend-files-'));
@@ -62,6 +74,36 @@ test('streaming transfer round-trips multiple files with SHA-256 verification', 
   assert.equal(await fsp.readFile(result.paths[1], 'utf8'), 'standalone');
   assert.equal(result.bytes, offer.totalBytes);
   assert.equal(progress.at(-1), offer.totalBytes);
+});
+
+test('Windows sender serves files on the existing signal port', async (t) => {
+  const { directory, source } = await fixture(t);
+  const port = await unusedPort();
+  const transferServer = new FileTransferServer({ host: '127.0.0.1', sharedPort: port });
+  const signalServer = new SignalServer({ id: 'receiver-files', name: 'Windows', port }, {
+    host: '127.0.0.1',
+    port,
+    requestHandler: (request, response) => transferServer.handleRequest(request, response)
+  });
+  await signalServer.start();
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  const welcome = await new Promise((resolve, reject) => {
+    socket.once('message', (message) => resolve(JSON.parse(message.toString())));
+    socket.once('error', reject);
+  });
+  assert.equal(welcome.type, 'welcome');
+  socket.send(JSON.stringify(makeSignal('hello', { hostId: 'mac-files', name: 'Mac' })));
+  t.after(async () => {
+    socket.close();
+    await transferServer.stop();
+    await signalServer.stop();
+  });
+
+  const offer = await transferServer.register([path.join(source, '单独.txt')]);
+  assert.equal(offer.port, port);
+  const client = new FileTransferClient({ cacheDirectory: path.join(directory, 'shared-port-cache') });
+  const result = await client.receive(offer, '127.0.0.1');
+  assert.equal(await fsp.readFile(result.paths[0], 'utf8'), 'standalone');
 });
 
 test('file clipboard offers changes once and suppresses a remote echo', async () => {

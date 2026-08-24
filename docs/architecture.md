@@ -56,7 +56,7 @@ sequenceDiagram
 - 主端必须先收到 `welcome` 并取得子端真实 UUID，再用该 UUID 生成稳定虚拟显示 serial、创建显示器和发起 offer；手动地址占位 ID 会在此时被真实 ID 替换。
 - UDP 发现只携带定位和能力信息；收到报文时使用 UDP 数据包的来源 IPv4 作为子端地址，不信任报文自报地址。
 - WebSocket 只传 `hello/offer/answer/ice/ping/pong/disconnect` 等 JSON 信令，不承载视频帧。
-- 键鼠模式复用同一 WebSocket，增加 `control/input/clipboard/file-offer/file-status` 消息；它不创建 WebRTC 或虚拟显示器。文件内容不塞入 JSON，而是从当前复制端的临时 TCP 服务流式传输。
+- 键鼠模式复用同一 WebSocket，增加 `control/input/clipboard/file-offer/file-status` 消息；它不创建 WebRTC 或虚拟显示器。文件内容不塞入 JSON。Windows→Mac 文件流复用子端信令 TCP 监听器，Mac→Windows 则从 Mac 的临时 TCP 服务流式传输。
 - 子端拒绝第二个同时在线的主端，返回 WebSocket 关闭码 `1013`。
 
 ### 媒体面
@@ -93,7 +93,7 @@ HiDPI 模式把 GUI 请求宽高视为**逻辑桌面尺寸**，物理帧缓冲�
 
 共享期间两端每 500 ms 检查纯文本剪贴板，并约每 650 ms 通过原生 helper 检查文件剪贴板。启动共享时以 Mac 当前内容为初始值，之后任一端变化都会同步；文本和文件格式互斥检测，避免把 Finder/资源管理器显示的文件名误发成文本，并用系统剪贴板 revision 抑制回环。Windows 布局使用主显示器物理像素宽高，使高 DPI 缩放下的绝对光标坐标与 Win32 一致。
 
-文件复制端递归生成不可变清单，最多 10000 个条目、20 GiB，跳过符号链接/特殊文件；真正复制时才按需监听随机 TCP 端口。接收端按条目流式落盘到 userData 缓存，每个普通文件校验 SHA-256，并核对清单条目数、总字节和顶层名称；全部成功后才原子提交并写入系统文件剪贴板。传输可以在 GUI 取消，未完成目录立即删除，已完成缓存默认 7 天后清理。
+文件复制端递归生成不可变清单，最多 10000 个条目、20 GiB，跳过符号链接/特殊文件。Windows 作为文件源时复用信令端口的 HTTP 路由，避免另开入站随机端口；Mac 作为文件源时才按需监听随机 TCP 端口。接收端按条目流式落盘到 userData 缓存，每个普通文件校验 SHA-256，并核对清单条目数、总字节和顶层名称；全部成功后才原子提交并写入系统文件剪贴板。传输可以在 GUI 取消，未完成目录立即删除，已完成缓存默认 7 天后清理。
 
 ## 5. 配置与“记忆”模型
 

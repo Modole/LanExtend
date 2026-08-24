@@ -1,6 +1,6 @@
 {
   "name": "lanextend",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "LAN extended display with seamless keyboard, mouse, text and file clipboard sharing",
   "main": "src/main.js",
   "author": "LanExtend contributors",

@@ -146,6 +146,7 @@ class FileTransferServer extends EventEmitter {
     super();
     this.host = options.host || '0.0.0.0';
     this.port = options.port ?? 0;
+    this.sharedPort = isValidPort(options.sharedPort) ? options.sharedPort : null;
     this.offerTtlMs = options.offerTtlMs || DEFAULT_OFFER_TTL_MS;
     this.server = null;
     this.transfers = new Map();
@@ -157,9 +158,18 @@ class FileTransferServer extends EventEmitter {
   async start() {
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    if (this.sharedPort) {
+      this.#startPruneTimer();
+      return this.address();
+    }
     if (this.server) return this.address();
     const server = http.createServer((request, response) => {
-      this.#handle(request, response).catch((error) => {
+      this.handleRequest(request, response).then((handled) => {
+        if (!handled && !response.headersSent) {
+          response.writeHead(404);
+          response.end();
+        }
+      }).catch((error) => {
         if (!response.headersSent) {
           response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
           response.end('transfer failed');
@@ -183,12 +193,25 @@ class FileTransferServer extends EventEmitter {
       server.close();
       throw error;
     }
+    this.#startPruneTimer();
+    return this.address();
+  }
+
+  #startPruneTimer() {
+    if (this.pruneTimer) return;
     this.pruneTimer = setInterval(() => this.prune(), 60_000);
     this.pruneTimer.unref?.();
+  }
+
+  useSharedPort(port) {
+    if (!isValidPort(port)) throw new Error('共享文件传输端口无效');
+    if (this.server) throw new Error('独立文件传输服务已经启动');
+    this.sharedPort = port;
     return this.address();
   }
 
   address() {
+    if (this.sharedPort) return { host: this.host, port: this.sharedPort };
     const address = this.server?.address();
     return { host: this.host, port: typeof address === 'object' && address ? address.port : null };
   }
@@ -210,24 +233,27 @@ class FileTransferServer extends EventEmitter {
     };
   }
 
-  async #handle(request, response) {
+  async handleRequest(request, response) {
+    const match = /^\/v1\/transfers\/([0-9a-f-]{36})\/stream$/.exec(
+      new URL(request.url, 'http://lanextend.local').pathname
+    );
+    if (!match) return false;
     if (request.method !== 'GET') {
       response.writeHead(405, { allow: 'GET' });
       response.end();
-      return;
+      return true;
     }
     const remoteAddress = normalizedRemoteAddress(request.socket.remoteAddress);
     if (!isPrivateIPv4(remoteAddress)) {
       response.writeHead(403);
       response.end();
-      return;
+      return true;
     }
-    const match = /^\/v1\/transfers\/([0-9a-f-]{36})\/stream$/.exec(new URL(request.url, 'http://lanextend.local').pathname);
-    const transfer = match ? this.transfers.get(match[1]) : null;
+    const transfer = this.transfers.get(match[1]);
     if (!transfer || transfer.expiresAt < Date.now()) {
       response.writeHead(404);
       response.end();
-      return;
+      return true;
     }
     this.activeResponses.set(transfer.id, response);
     response.writeHead(200, {
@@ -290,6 +316,7 @@ class FileTransferServer extends EventEmitter {
       this.activeResponses.delete(transfer.id);
       this.#scheduleIdleStop();
     }
+    return true;
   }
 
   cancel(transferId) {
@@ -316,6 +343,7 @@ class FileTransferServer extends EventEmitter {
   }
 
   #scheduleIdleStop() {
+    if (this.sharedPort) return;
     if (!this.server || this.transfers.size || this.activeResponses.size || this.idleTimer) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null;
@@ -332,6 +360,7 @@ class FileTransferServer extends EventEmitter {
     for (const response of this.activeResponses.values()) response.destroy();
     this.activeResponses.clear();
     this.transfers.clear();
+    this.sharedPort = null;
     if (!this.server) return;
     const server = this.server;
     this.server = null;
@@ -549,6 +578,14 @@ class FileTransferManager extends EventEmitter {
   async start() {
     await this.cleanupCache();
     return this.server.start();
+  }
+
+  useSharedPort(port) {
+    return this.server.useSharedPort(port);
+  }
+
+  handleRequest(request, response) {
+    return this.server.handleRequest(request, response);
   }
 
   createOffer(paths) {

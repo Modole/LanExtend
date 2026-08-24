@@ -6,7 +6,7 @@
 
 - 主端为 macOS 14 或更高版本，子端为 Windows 10/11 64 位。
 - 两台设备在同一个由你管理的可信 IPv4 局域网，最好是同一 VLAN/子网。
-- Windows 子端可发出 UDP `47771` 广播、接收入站 TCP `47772` 信令，并允许 LanExtend 在专用网络协商 WebRTC 动态 UDP；Mac 能接收入站发现报文。若使用文件剪贴板，两端还需允许 LanExtend 在复制时临时监听随机高位 TCP 端口。
+- Windows 子端可发出 UDP `47771` 广播、接收入站 TCP `47772` 信令/Windows 文件流，并允许 LanExtend 在专用网络协商 WebRTC 动态 UDP；Mac 能接收入站发现报文。Mac→Windows 文件复制还需要 Mac 允许 LanExtend 临时监听随机高位 TCP 端口。
 - 网络未开启 AP/客户端隔离，且没有把相关端口映射到公网。
 - 你接受当前 MVP 没有认证：同网攻击者可能伪装设备或干扰信令。
 
@@ -59,7 +59,7 @@ npm run dev:receiver
 2. 设置便于辨认且不包含敏感信息的设备名称。
 3. 保持默认信令端口 `47772`，除非端口冲突或网络策略要求修改。
 4. 根据需要开启“连接后自动全屏”。
-5. 若 Windows Defender 防火墙提示，选择允许访问“专用网络”，不要为“公用网络”放行。固定方向是 Windows 出站 UDP `47771` 广播、Windows 入站 TCP 信令；WebRTC 使用动态 UDP，文件复制端使用动态 TCP，因此优先按 LanExtend 应用放行，而不是只开两个固定端口。
+5. 若 Windows Defender 防火墙提示，选择允许访问“专用网络”，不要为“公用网络”放行。固定方向是 Windows 出站 UDP `47771` 广播、Windows 入站 TCP `47772` 信令及 Windows→Mac 文件流；WebRTC 使用动态 UDP，Mac→Windows 文件流使用 Mac 临时 TCP，因此仍建议按 LanExtend 应用放行。
 6. 确认 GUI 显示正在监听，然后再启动 Mac 主端。
 
 子端会每 1.5 秒发送 UDP 广播。它只接受一个活动主端；已被占用时，第二台 Mac 会收到“子端当前正在使用”或连接关闭。

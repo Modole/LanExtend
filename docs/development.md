@@ -92,7 +92,7 @@ npm ci
 npm run dev:receiver
 ```
 
-确认 Windows 网络配置文件为“专用”：允许子端程序向 UDP `47771` 发出广播、从可信 Mac/子网接收配置的 TCP 信令端口，并允许 WebRTC 动态 UDP。文件剪贴板还会在当前复制端按需监听随机 TCP 端口，因此双端应按 LanExtend 应用而不是固定端口放行专用网络。Mac 端需要接收入站发现广播。不要对公用网络放行。
+确认 Windows 网络配置文件为“专用”：允许子端程序向 UDP `47771` 发出广播、从可信 Mac/子网接收配置的 TCP 信令端口（同端口承载 Windows→Mac 文件流），并允许 WebRTC 动态 UDP。Mac→Windows 文件流会在 Mac 按需监听随机 TCP 端口，因此 Mac 仍应按 LanExtend 应用放行专用网络。Mac 端还需要接收入站发现广播。不要对公用网络放行。
 
 ### 双机调试
 
